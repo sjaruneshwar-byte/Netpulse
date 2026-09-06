@@ -9,114 +9,140 @@
 
 double getCpuUsage()
 {
-    std::ifstream file("/proc/stat");
+    std::ifstream file1("/proc/stat");
 
-    if (!file.is_open())
+    if (!file1.is_open())
     {
         return -1.0;
     }
 
     std::string line;
 
-    std::getline(file, line);
+    std::getline(file1, line);
 
-    std::istringstream stream(line);
+    std::istringstream stream1(line);
 
     std::string cpu;
 
-    unsigned long long user = 0;
-    unsigned long long nice = 0;
-    unsigned long long system = 0;
-    unsigned long long idle = 0;
-    unsigned long long iowait = 0;
-    unsigned long long irq = 0;
-    unsigned long long softirq = 0;
-    unsigned long long steal = 0;
+    unsigned long long user1 = 0;
+    unsigned long long nice1 = 0;
+    unsigned long long system1 = 0;
+    unsigned long long idle1 = 0;
+    unsigned long long iowait1 = 0;
+    unsigned long long irq1 = 0;
+    unsigned long long softirq1 = 0;
+    unsigned long long steal1 = 0;
 
-    stream >> cpu
-           >> user
-           >> nice
-           >> system
-           >> idle
-           >> iowait
-           >> irq
-           >> softirq
-           >> steal;
+    stream1 >> cpu
+            >> user1
+            >> nice1
+            >> system1
+            >> idle1
+            >> iowait1
+            >> irq1
+            >> softirq1
+            >> steal1;
 
-    unsigned long long idleTime =
-        idle + iowait;
+    unsigned long long idleTime1 =
+        idle1 + iowait1;
 
-    unsigned long long totalTime =
-        user +
-        nice +
-        system +
-        idle +
-        iowait +
-        irq +
-        softirq +
-        steal;
+    unsigned long long totalTime1 =
+        user1 +
+        nice1 +
+        system1 +
+        idle1 +
+        iowait1 +
+        irq1 +
+        softirq1 +
+        steal1;
 
-    // Take first sample.
+
+    // Wait one second before taking
+    // the second CPU measurement.
     std::this_thread::sleep_for(
         std::chrono::seconds(1)
     );
 
-    file.close();
 
-    std::ifstream secondFile("/proc/stat");
+    std::ifstream file2("/proc/stat");
 
-    if (!secondFile.is_open())
+    if (!file2.is_open())
     {
         return -1.0;
     }
 
-    std::getline(secondFile, line);
+    std::getline(file2, line);
 
-    std::istringstream secondStream(line);
+    std::istringstream stream2(line);
 
-    secondStream >> cpu
-                 >> user
-                 >> nice
-                 >> system
-                 >> idle
-                 >> iowait
-                 >> irq
-                 >> softirq
-                 >> steal;
+    unsigned long long user2 = 0;
+    unsigned long long nice2 = 0;
+    unsigned long long system2 = 0;
+    unsigned long long idle2 = 0;
+    unsigned long long iowait2 = 0;
+    unsigned long long irq2 = 0;
+    unsigned long long softirq2 = 0;
+    unsigned long long steal2 = 0;
 
-    unsigned long long secondIdleTime =
-        idle + iowait;
+    stream2 >> cpu
+            >> user2
+            >> nice2
+            >> system2
+            >> idle2
+            >> iowait2
+            >> irq2
+            >> softirq2
+            >> steal2;
 
-    unsigned long long secondTotalTime =
-        user +
-        nice +
-        system +
-        idle +
-        iowait +
-        irq +
-        softirq +
-        steal;
+    unsigned long long idleTime2 =
+        idle2 + iowait2;
+
+    unsigned long long totalTime2 =
+        user2 +
+        nice2 +
+        system2 +
+        idle2 +
+        iowait2 +
+        irq2 +
+        softirq2 +
+        steal2;
+
 
     unsigned long long totalDifference =
-        secondTotalTime - totalTime;
+        totalTime2 - totalTime1;
 
     unsigned long long idleDifference =
-        secondIdleTime - idleTime;
+        idleTime2 - idleTime1;
+
 
     if (totalDifference == 0)
     {
         return 0.0;
     }
 
-    double cpuUsage =
+
+    double usage =
         100.0 *
         (1.0 -
          static_cast<double>(idleDifference) /
          totalDifference);
 
-    return cpuUsage;
-}
 
+    // Protect against tiny numerical
+    // anomalies.
+    if (usage < 0.0)
+    {
+        usage = 0.0;
+    }
+
+    if (usage > 100.0)
+    {
+        usage = 100.0;
+    }
+
+
+    return usage;
+}
 
 double getMemoryUsage()
 {

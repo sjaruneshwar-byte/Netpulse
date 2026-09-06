@@ -9,20 +9,23 @@
 
 #include "system_metrics.h"
 #include "network_metrics.h"
+#include "tcp_client.h"
+#include "../common/protocol.h"
 
 
+// --------------------------------------------------
+// Convert bytes/sec into a readable format
+// --------------------------------------------------
 void printDataRate(
     const std::string& label,
     double bytesPerSecond)
 {
     std::cout << label;
 
-    if (bytesPerSecond >=
-        1024.0 * 1024.0)
+    if (bytesPerSecond >= 1024.0 * 1024.0)
     {
         std::cout
-            << bytesPerSecond /
-               (1024.0 * 1024.0)
+            << bytesPerSecond / (1024.0 * 1024.0)
             << " MB/s";
     }
     else if (bytesPerSecond >= 1024.0)
@@ -42,67 +45,44 @@ void printDataRate(
 }
 
 
-void displayNetworkMetrics(
-    const std::vector<NetworkStats>& previousStats,
-    const std::vector<NetworkStats>& currentStats,
-    double elapsedSeconds)
+// --------------------------------------------------
+// Find matching raw network statistics
+// --------------------------------------------------
+const NetworkStats* findNetworkStats(
+    const std::vector<NetworkStats>& stats,
+    const std::string& interfaceName)
 {
-    std::vector<NetworkRates> rates =
-        calculateNetworkRates(
-            previousStats,
-            currentStats,
-            elapsedSeconds
-        );
-
-    std::cout << "\n";
-    std::cout << "NETWORK METRICS\n";
-    std::cout << "----------------------------------------\n";
-
-    if (rates.empty())
+    for (const auto& stat : stats)
     {
-        std::cout << "No network interfaces found.\n";
-        return;
+        if (stat.interfaceName == interfaceName)
+        {
+            return &stat;
+        }
     }
 
-    for (const auto& rate : rates)
-    {
-        std::cout << "\n";
-
-        std::cout
-            << "Interface : "
-            << rate.interfaceName
-            << "\n";
-
-        printDataRate(
-            "RX Rate   : ",
-            rate.rxBytesPerSecond
-        );
-
-        printDataRate(
-            "TX Rate   : ",
-            rate.txBytesPerSecond
-        );
-
-        std::cout << std::fixed
-                  << std::setprecision(2);
-
-        std::cout
-            << "RX Packets: "
-            << rate.rxPacketsPerSecond
-            << " pkt/s\n";
-
-        std::cout
-            << "TX Packets: "
-            << rate.txPacketsPerSecond
-            << " pkt/s\n";
-    }
+    return nullptr;
 }
 
 
+// --------------------------------------------------
+// MAIN
+// --------------------------------------------------
 int main()
 {
-    const std::string agentId =
-        "NODE_01";
+    // ----------------------------------------------
+    // Agent configuration
+    // ----------------------------------------------
+
+    const std::string agentId = "NODE_01";
+
+    const std::string serverIP = "127.0.0.1";
+
+    const int serverPort = 9000;
+
+
+    // ----------------------------------------------
+    // Get hostname
+    // ----------------------------------------------
 
     char hostname[HOST_NAME_MAX + 1];
 
@@ -116,15 +96,15 @@ int main()
         return 1;
     }
 
-    hostname[HOST_NAME_MAX] =
-        '\0';
+    hostname[HOST_NAME_MAX] = '\0';
 
 
-    // ------------------------------------------
-    // HEADER
-    // ------------------------------------------
+    // ----------------------------------------------
+    // Agent header
+    // ----------------------------------------------
 
     std::cout << "\n";
+
     std::cout
         << "========================================\n";
 
@@ -148,15 +128,52 @@ int main()
         << "Platform  : Linux / WSL2\n";
 
 
-    // ------------------------------------------
-    // CONTINUOUS MONITORING
-    // ------------------------------------------
+    // ----------------------------------------------
+    // Create persistent TCP client
+    // ----------------------------------------------
+
+    TcpClient tcpClient;
+
+
+    // ----------------------------------------------
+    // Connect to monitoring server
+    // ----------------------------------------------
+
+    std::cout << "\n";
+
+    std::cout
+        << "NETWORK CONNECTION\n";
+
+    std::cout
+        << "----------------------------------------\n";
+
+    bool serverConnected =
+        tcpClient.connectToServer(
+            serverIP,
+            serverPort,
+            agentId
+        );
+
+    if (!serverConnected)
+    {
+        std::cerr
+            << "Warning: Could not connect to "
+               "NetPulse server.\n";
+
+        std::cerr
+            << "Local monitoring will continue.\n";
+    }
+
+
+    // ----------------------------------------------
+    // Continuous monitoring loop
+    // ----------------------------------------------
 
     while (true)
     {
-        // ======================================
+        // ==========================================
         // SYSTEM METRICS
-        // ======================================
+        // ==========================================
 
         double cpuUsage =
             getCpuUsage();
@@ -167,7 +184,23 @@ int main()
         std::string uptime =
             getUptime();
 
+
+        if (cpuUsage < 0 ||
+            memoryUsage < 0)
+        {
+            std::cerr
+                << "Error: Could not read system metrics.\n";
+
+            break;
+        }
+
+
+        // ==========================================
+        // DISPLAY SYSTEM METRICS
+        // ==========================================
+
         std::cout << "\n";
+
         std::cout
             << "========================================\n";
 
@@ -197,9 +230,9 @@ int main()
             << "\n";
 
 
-        // ======================================
+        // ==========================================
         // FIRST NETWORK SAMPLE
-        // ======================================
+        // ==========================================
 
         std::vector<NetworkStats>
             previousStats =
@@ -209,21 +242,22 @@ int main()
             std::chrono::steady_clock::now();
 
 
-        // ======================================
-        // SAMPLING INTERVAL
-        // ======================================
-
         std::cout
             << "\nSampling network for 5 seconds...\n";
+
+
+        // ==========================================
+        // WAIT
+        // ==========================================
 
         std::this_thread::sleep_for(
             std::chrono::seconds(5)
         );
 
 
-        // ======================================
+        // ==========================================
         // SECOND NETWORK SAMPLE
-        // ======================================
+        // ==========================================
 
         std::vector<NetworkStats>
             currentStats =
@@ -233,9 +267,9 @@ int main()
             std::chrono::steady_clock::now();
 
 
-        // ======================================
+        // ==========================================
         // ACTUAL ELAPSED TIME
-        // ======================================
+        // ==========================================
 
         double elapsedSeconds =
             std::chrono::duration<double>(
@@ -243,20 +277,214 @@ int main()
             ).count();
 
 
-        // ======================================
-        // NETWORK OUTPUT
-        // ======================================
+        // ==========================================
+        // CALCULATE NETWORK RATES
+        // ==========================================
 
-        displayNetworkMetrics(
-            previousStats,
-            currentStats,
-            elapsedSeconds
-        );
+        std::vector<NetworkRates>
+            rates =
+                calculateNetworkRates(
+                    previousStats,
+                    currentStats,
+                    elapsedSeconds
+                );
+
+
+        // ==========================================
+        // DISPLAY NETWORK METRICS
+        // ==========================================
 
         std::cout << "\n";
+
         std::cout
-            << "Next measurement in 5 seconds...\n";
+            << "NETWORK METRICS\n";
+
+        std::cout
+            << "----------------------------------------\n";
+
+
+        if (rates.empty())
+        {
+            std::cout
+                << "No network interfaces found.\n";
+        }
+        else
+        {
+            for (const auto& rate : rates)
+            {
+                std::cout << "\n";
+
+                std::cout
+                    << "Interface : "
+                    << rate.interfaceName
+                    << "\n";
+
+                printDataRate(
+                    "RX Rate   : ",
+                    rate.rxBytesPerSecond
+                );
+
+                printDataRate(
+                    "TX Rate   : ",
+                    rate.txBytesPerSecond
+                );
+
+                std::cout
+                    << "RX Packets: "
+                    << rate.rxPacketsPerSecond
+                    << " pkt/s\n";
+
+                std::cout
+                    << "TX Packets: "
+                    << rate.txPacketsPerSecond
+                    << " pkt/s\n";
+
+                std::cout
+                    << "RX Errors : "
+                    << rate.rxErrors
+                    << "\n";
+
+                std::cout
+                    << "TX Errors : "
+                    << rate.txErrors
+                    << "\n";
+
+                std::cout
+                    << "RX Drops  : "
+                    << rate.rxDrops
+                    << "\n";
+
+                std::cout
+                    << "TX Drops  : "
+                    << rate.txDrops
+                    << "\n";
+
+
+                // ==================================
+                // SEND TELEMETRY
+                // ==================================
+
+                if (tcpClient.isConnected())
+                {
+                    const NetworkStats*
+                        rawStats =
+                            findNetworkStats(
+                                currentStats,
+                                rate.interfaceName
+                            );
+
+
+                    unsigned long long rxErrors = 0;
+                    unsigned long long txErrors = 0;
+                    unsigned long long rxDrops = 0;
+                    unsigned long long txDrops = 0;
+
+
+                    if (rawStats != nullptr)
+                    {
+                        rxErrors =
+                            rawStats->rxErrors;
+
+                        txErrors =
+                            rawStats->txErrors;
+
+                        rxDrops =
+                            rawStats->rxDrops;
+
+                        txDrops =
+                            rawStats->txDrops;
+                    }
+
+
+                    // ==================================
+                    // Generate Unix timestamp
+                    // ==================================
+
+                    auto currentTime =
+                        std::chrono::system_clock::now();
+
+                    long long timestamp =
+                        std::chrono::duration_cast<
+                            std::chrono::seconds
+                        >(
+                            currentTime.time_since_epoch()
+                        ).count();
+
+
+                    // ==================================
+                    // Encode uptime
+                    // ==================================
+
+                    std::string encodedUptime =
+                        uptime;
+
+                    for (char& c : encodedUptime)
+                    {
+                        if (c == ' ')
+                        {
+                            c = '_';
+                        }
+                    }
+
+
+                    // ==================================
+                    // Create telemetry message
+                    // ==================================
+
+                    std::string telemetry =
+                        createTelemetryMessage(
+                            agentId,
+                            hostname,
+                            timestamp,
+                            cpuUsage,
+                            memoryUsage,
+                            encodedUptime,
+                            rate.interfaceName,
+                            rate.rxBytesPerSecond,
+                            rate.txBytesPerSecond,
+                            rate.rxPacketsPerSecond,
+                            rate.txPacketsPerSecond,
+                            rxErrors,
+                            txErrors,
+                            rxDrops,
+                            txDrops
+                        );
+
+
+                    // ==================================
+                    // Send telemetry
+                    // ==================================
+
+                    if (tcpClient.sendMessage(
+                            telemetry))
+                    {
+                        std::cout
+                            << "\nTelemetry sent successfully "
+                               "for interface "
+                            << rate.interfaceName
+                            << ".\n";
+                    }
+                    else
+                    {
+                        std::cerr
+                            << "\nWarning: Failed to send "
+                               "telemetry.\n";
+                    }
+                }
+            }
+        }
+
+
+        std::cout
+            << "\nNext measurement in 5 seconds...\n";
     }
+
+
+    // ----------------------------------------------
+    // Cleanup
+    // ----------------------------------------------
+
+    tcpClient.disconnect();
 
     return 0;
 }

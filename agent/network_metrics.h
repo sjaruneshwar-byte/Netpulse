@@ -4,6 +4,11 @@
 #include <string>
 #include <vector>
 
+
+// --------------------------------------------------
+// Raw network interface statistics
+// --------------------------------------------------
+
 struct NetworkStats
 {
     std::string interfaceName;
@@ -19,6 +24,11 @@ struct NetworkStats
     unsigned long long txDrops;
 };
 
+
+// --------------------------------------------------
+// Calculated network rates + error/drop counters
+// --------------------------------------------------
+
 struct NetworkRates
 {
     std::string interfaceName;
@@ -28,14 +38,27 @@ struct NetworkRates
 
     double rxPacketsPerSecond;
     double txPacketsPerSecond;
+
+    unsigned long long rxErrors;
+    unsigned long long txErrors;
+
+    unsigned long long rxDrops;
+    unsigned long long txDrops;
 };
 
+
+// --------------------------------------------------
+// Function declarations
+// --------------------------------------------------
+
 std::vector<NetworkStats> getNetworkStats();
+
 
 std::vector<NetworkRates> calculateNetworkRates(
     const std::vector<NetworkStats>& previous,
     const std::vector<NetworkStats>& current,
     double elapsedSeconds
 );
+
 
 #endif

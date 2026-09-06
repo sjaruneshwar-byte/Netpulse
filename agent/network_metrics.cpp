@@ -134,6 +134,18 @@ std::vector<NetworkRates> calculateNetworkRates(
 
                 rate.interfaceName =
                     currentStats.interfaceName;
+                
+                rate.rxErrors =
+                    currentStats.rxErrors;
+
+                rate.txErrors =
+                    currentStats.txErrors;
+
+                rate.rxDrops =
+                    currentStats.rxDrops;
+
+                rate.txDrops =
+                    currentStats.txDrops;
 
                 // Protect against counter reset/wrap.
                 if (currentStats.rxBytes >=
