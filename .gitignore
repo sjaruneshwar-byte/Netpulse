@@ -1,0 +1,31 @@
+# Build outputs
+agent/agent
+server/server
+*.o
+*.out
+
+# Datasets
+datasets/
+data/
+*.zip
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+
+# Environment files
+.env
