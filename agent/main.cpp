@@ -6,6 +6,7 @@
 #include <chrono>
 #include <thread>
 #include <vector>
+#include <atomic>
 
 #include "system_metrics.h"
 #include "network_metrics.h"
@@ -67,13 +68,18 @@ const NetworkStats* findNetworkStats(
 // --------------------------------------------------
 // MAIN
 // --------------------------------------------------
-int main()
+int main(int argc, char* argv[])
 {
     // ----------------------------------------------
     // Agent configuration
     // ----------------------------------------------
 
-    const std::string agentId = "NODE_01";
+    std::string agentId = "NODE_01";
+
+    if (argc > 1)
+    {
+        agentId = argv[1];
+    }
 
     const std::string serverIP = "127.0.0.1";
 
@@ -163,6 +169,48 @@ int main()
         std::cerr
             << "Local monitoring will continue.\n";
     }
+
+
+    // ----------------------------------------------
+    // Heartbeat thread
+    // ----------------------------------------------
+
+    std::atomic<bool> heartbeatRunning(true);
+
+    std::thread heartbeatThread(
+        [&tcpClient, &heartbeatRunning, &agentId]()
+        {
+            while (heartbeatRunning)
+            {
+                std::this_thread::sleep_for(
+                    std::chrono::seconds(2)
+                );
+
+                if (!heartbeatRunning)
+                {
+                    break;
+                }
+
+                if (tcpClient.isConnected())
+                {
+                    std::string heartbeat =
+                        "HEARTBEAT AGENT=" + agentId;
+
+                    if (tcpClient.sendMessage(
+                            heartbeat))
+                    {
+                        std::cout
+                            << "\nHeartbeat sent.\n";
+                    }
+                    else
+                    {
+                        std::cerr
+                            << "\nWarning: Failed to send heartbeat.\n";
+                    }
+                }
+            }
+        }
+    );
 
 
     // ----------------------------------------------
@@ -361,7 +409,7 @@ int main()
 
 
                 // ==================================
-                // SEND TELEMETRY
+                // SEND FULL TELEMETRY
                 // ==================================
 
                 if (tcpClient.isConnected())
@@ -483,6 +531,13 @@ int main()
     // ----------------------------------------------
     // Cleanup
     // ----------------------------------------------
+
+    heartbeatRunning = false;
+
+    if (heartbeatThread.joinable())
+    {
+        heartbeatThread.join();
+    }
 
     tcpClient.disconnect();
 

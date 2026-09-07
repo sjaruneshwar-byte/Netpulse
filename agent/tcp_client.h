@@ -2,6 +2,7 @@
 #define TCP_CLIENT_H
 
 #include <string>
+#include <mutex>
 
 class TcpClient
 {
@@ -30,6 +31,8 @@ private:
     int socketFd;
 
     bool connected;
+
+    mutable std::mutex socketMutex;
 };
 
 #endif

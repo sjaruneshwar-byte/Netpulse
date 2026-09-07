@@ -1,5 +1,5 @@
 #include "tcp_client.h"
-#include "../common/protocol.h"
+
 #include <iostream>
 #include <string>
 #include <cstring>
@@ -8,6 +8,8 @@
 
 #include <sys/socket.h>
 #include <arpa/inet.h>
+
+#include "../common/protocol.h"
 
 
 TcpClient::TcpClient()
@@ -28,9 +30,12 @@ bool TcpClient::connectToServer(
     int serverPort,
     const std::string& agentId)
 {
-    // ------------------------------------------
-    // Create TCP socket
-    // ------------------------------------------
+    std::lock_guard<std::mutex> lock(socketMutex);
+
+    if (connected)
+    {
+        return true;
+    }
 
     socketFd = socket(
         AF_INET,
@@ -46,18 +51,12 @@ bool TcpClient::connectToServer(
         return false;
     }
 
-
-    // ------------------------------------------
-    // Configure server address
-    // ------------------------------------------
-
     sockaddr_in serverAddress{};
 
     serverAddress.sin_family = AF_INET;
 
     serverAddress.sin_port =
         htons(serverPort);
-
 
     if (inet_pton(
             AF_INET,
@@ -68,16 +67,10 @@ bool TcpClient::connectToServer(
             << "Error: Invalid server IP address.\n";
 
         close(socketFd);
-
         socketFd = -1;
 
         return false;
     }
-
-
-    // ------------------------------------------
-    // Connect
-    // ------------------------------------------
 
     std::cout
         << "\nConnecting to server "
@@ -85,7 +78,6 @@ bool TcpClient::connectToServer(
         << ":"
         << serverPort
         << "...\n";
-
 
     if (connect(
             socketFd,
@@ -97,84 +89,55 @@ bool TcpClient::connectToServer(
             << "Error: Could not connect to server.\n";
 
         close(socketFd);
-
         socketFd = -1;
 
         return false;
     }
 
-
     connected = true;
-
 
     std::cout
         << "TCP connection established!\n";
 
-
-    // ------------------------------------------
-    // HELLO
-    // ------------------------------------------
-
     std::string hello =
         "HELLO " + agentId;
 
-
-    if (!sendMessage(hello))
+    if (!sendFramedMessage(
+            socketFd,
+            hello))
     {
-        disconnect();
+        close(socketFd);
+        socketFd = -1;
+        connected = false;
 
         return false;
     }
-
 
     std::cout
         << "Sent: "
         << hello
         << "\n";
 
+    std::string response;
 
-    // ------------------------------------------
-    // Receive WELCOME
-    // ------------------------------------------
-
-    char buffer[1024];
-
-    std::memset(
-        buffer,
-        0,
-        sizeof(buffer)
-    );
-
-
-    ssize_t bytesReceived =
-        recv(
+    if (!receiveFramedMessage(
             socketFd,
-            buffer,
-            sizeof(buffer) - 1,
-            0
-        );
-
-
-    if (bytesReceived <= 0)
+            response))
     {
         std::cerr
-            << "Error: Failed to receive "
-               "server response.\n";
+            << "Error: Failed to receive server response.\n";
 
-        disconnect();
+        close(socketFd);
+        socketFd = -1;
+        connected = false;
 
         return false;
     }
 
-
-    buffer[bytesReceived] = '\0';
-
-
     std::cout
         << "Received: "
-        << buffer
+        << response
         << "\n";
-
 
     return true;
 }
@@ -183,7 +146,9 @@ bool TcpClient::connectToServer(
 bool TcpClient::sendMessage(
     const std::string& message)
 {
-    if (!connected)
+    std::lock_guard<std::mutex> lock(socketMutex);
+
+    if (!connected || socketFd < 0)
     {
         return false;
     }
@@ -197,10 +162,11 @@ bool TcpClient::sendMessage(
 
 void TcpClient::disconnect()
 {
+    std::lock_guard<std::mutex> lock(socketMutex);
+
     if (socketFd >= 0)
     {
         close(socketFd);
-
         socketFd = -1;
     }
 
@@ -210,5 +176,7 @@ void TcpClient::disconnect()
 
 bool TcpClient::isConnected() const
 {
-    return connected;
+    std::lock_guard<std::mutex> lock(socketMutex);
+
+    return connected && socketFd >= 0;
 }
