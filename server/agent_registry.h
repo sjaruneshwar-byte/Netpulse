@@ -7,6 +7,7 @@
 
 #include "agent_state.h"
 
+
 class AgentRegistry
 {
 public:
@@ -15,17 +16,24 @@ public:
         const AgentState& state
     );
 
-    void markDisconnected(
-        const std::string& agentId
-    );
 
     bool getAgent(
         const std::string& agentId,
         AgentState& state
     );
 
-    std::unordered_map<std::string, AgentState>
-    getAllAgents();
+
+    std::unordered_map<
+        std::string,
+        AgentState
+    > getAllAgents();
+
+
+    bool setStatus(
+        const std::string& agentId,
+        AgentStatus status
+    );
+
 
 private:
 
@@ -36,5 +44,6 @@ private:
 
     mutable std::mutex registryMutex;
 };
+
 
 #endif

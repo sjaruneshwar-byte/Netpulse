@@ -4,7 +4,7 @@
 #include <iomanip>
 #include <thread>
 #include <chrono>
-
+#include "fault_detector.h"
 #include <unistd.h>
 
 #include <sys/socket.h>
@@ -16,26 +16,41 @@
 #include "agent_registry.h"
 
 
-// --------------------------------------------------
-// Configuration
-// --------------------------------------------------
-
 constexpr int PORT = 9000;
 
-// Agent is considered offline if nothing is
-// received for longer than this duration.
-constexpr int HEARTBEAT_TIMEOUT_SECONDS = 6;
+constexpr int SUSPECT_TIMEOUT_SECONDS = 4;
 
+constexpr int OFFLINE_TIMEOUT_SECONDS = 8;
 
-// --------------------------------------------------
-// Shared registry
-// --------------------------------------------------
 
 AgentRegistry agentRegistry;
 
 
 // --------------------------------------------------
-// Check agent health continuously
+// Convert status to string
+// --------------------------------------------------
+
+const char* statusToString(
+    AgentStatus status)
+{
+    switch (status)
+    {
+        case AgentStatus::HEALTHY:
+            return "HEALTHY";
+
+        case AgentStatus::SUSPECTED:
+            return "SUSPECTED";
+
+        case AgentStatus::OFFLINE:
+            return "OFFLINE";
+    }
+
+    return "UNKNOWN";
+}
+
+
+// --------------------------------------------------
+// Background failure detector
 // --------------------------------------------------
 
 void monitorAgents()
@@ -57,7 +72,8 @@ void monitorAgents()
             const AgentState& state =
                 entry.second;
 
-            if (!state.connected)
+            if (state.status ==
+                AgentStatus::OFFLINE)
             {
                 continue;
             }
@@ -69,36 +85,86 @@ void monitorAgents()
                     now - state.lastSeen
                 ).count();
 
-            if (elapsed >
-                HEARTBEAT_TIMEOUT_SECONDS)
+
+            // --------------------------------------
+            // HEALTHY -> SUSPECTED
+            // --------------------------------------
+
+            if (state.status ==
+                    AgentStatus::HEALTHY &&
+                elapsed >=
+                    SUSPECT_TIMEOUT_SECONDS)
             {
-                agentRegistry.markDisconnected(
-                    state.agentId
+                agentRegistry.setStatus(
+                    state.agentId,
+                    AgentStatus::SUSPECTED
                 );
 
                 std::cout
-                    << "\n";
+                    << "\n========================================\n";
+
+                std::cout
+                    << "⚠ AGENT SUSPECTED\n";
+
                 std::cout
                     << "========================================\n";
 
                 std::cout
-                    << "⚠ AGENT OFFLINE\n";
-
-                std::cout
-                    << "========================================\n";
-
-                std::cout
-                    << "Agent      : "
+                    << "Agent     : "
                     << state.agentId
                     << "\n";
 
                 std::cout
-                    << "Hostname   : "
+                    << "Hostname  : "
                     << state.hostname
                     << "\n";
 
                 std::cout
-                    << "Last seen  : "
+                    << "Last seen : "
+                    << elapsed
+                    << " seconds ago\n";
+
+                std::cout
+                    << "========================================\n";
+            }
+
+
+            // --------------------------------------
+            // SUSPECTED -> OFFLINE
+            // --------------------------------------
+
+            else if (
+                state.status ==
+                    AgentStatus::SUSPECTED &&
+                elapsed >=
+                    OFFLINE_TIMEOUT_SECONDS)
+            {
+                agentRegistry.setStatus(
+                    state.agentId,
+                    AgentStatus::OFFLINE
+                );
+
+                std::cout
+                    << "\n========================================\n";
+
+                std::cout
+                    << "🔴 AGENT OFFLINE\n";
+
+                std::cout
+                    << "========================================\n";
+
+                std::cout
+                    << "Agent     : "
+                    << state.agentId
+                    << "\n";
+
+                std::cout
+                    << "Hostname  : "
+                    << state.hostname
+                    << "\n";
+
+                std::cout
+                    << "Last seen : "
                     << elapsed
                     << " seconds ago\n";
 
@@ -151,10 +217,6 @@ void handleClient(
     std::string connectedAgentId;
 
 
-    // ------------------------------------------------
-    // Receive messages from this agent
-    // ------------------------------------------------
-
     while (true)
     {
         std::string message;
@@ -172,9 +234,9 @@ void handleClient(
         }
 
 
-        // ============================================
+        // ==========================================
         // HELLO
-        // ============================================
+        // ==========================================
 
         if (message.rfind(
                 "HELLO ",
@@ -183,18 +245,13 @@ void handleClient(
             connectedAgentId =
                 message.substr(6);
 
-
             const std::string response =
                 "WELCOME FROM NETPULSE SERVER";
-
 
             if (!sendFramedMessage(
                     clientSocket,
                     response))
             {
-                std::cerr
-                    << "Error: Failed to send WELCOME.\n";
-
                 break;
             }
 
@@ -207,12 +264,11 @@ void handleClient(
             state.clientIP =
                 clientIP;
 
-            state.connected =
-                true;
-
             state.lastSeen =
                 std::chrono::system_clock::now();
 
+            state.status =
+                AgentStatus::HEALTHY;
 
             agentRegistry.updateAgent(
                 state
@@ -223,15 +279,12 @@ void handleClient(
                 << "\nHELLO received from "
                 << connectedAgentId
                 << ".\n";
-
-            std::cout
-                << "Agent registered.\n";
         }
 
 
-        // ============================================
+        // ==========================================
         // TELEMETRY
-        // ============================================
+        // ==========================================
 
         else if (
             message.rfind(
@@ -240,15 +293,12 @@ void handleClient(
         {
             ParsedTelemetry telemetry{};
 
-
             if (!parseTelemetry(
                     message,
                     telemetry))
             {
                 std::cerr
-                    << "\nInvalid telemetry from "
-                    << clientIP
-                    << ".\n";
+                    << "Invalid telemetry.\n";
 
                 continue;
             }
@@ -301,85 +351,37 @@ void handleClient(
             state.txDrops =
                 telemetry.txDrops;
 
-            // Every valid telemetry message also
-            // proves that the agent is alive.
             state.lastSeen =
                 std::chrono::system_clock::now();
 
-            state.connected =
-                true;
+            // Any valid telemetry means the node
+            // is alive again.
+            state.status =
+                AgentStatus::HEALTHY;
 
 
             agentRegistry.updateAgent(
                 state
             );
+            evaluateFaults(state);
 
 
             std::cout
-                << "\n----------------------------------------\n";
-
-            std::cout
-                << "TELEMETRY FROM "
+                << "\nTelemetry from "
                 << telemetry.agentId
-                << "\n";
-
-            std::cout
-                << "----------------------------------------\n";
-
-            std::cout
-                << std::fixed
-                << std::setprecision(2);
-
-            std::cout
-                << "CPU       : "
+                << " | CPU="
                 << telemetry.cpuUsage
-                << " %\n";
-
-            std::cout
-                << "Memory    : "
+                << "% | MEM="
                 << telemetry.memoryUsage
-                << " %\n";
-
-            std::cout
-                << "Interface : "
+                << "% | IFACE="
                 << telemetry.interfaceName
-                << "\n";
-
-            std::cout
-                << "RX Rate   : "
-                << telemetry.rxBytesPerSecond
-                << " B/s\n";
-
-            std::cout
-                << "TX Rate   : "
-                << telemetry.txBytesPerSecond
-                << " B/s\n";
-
-            std::cout
-                << "RX Errors : "
-                << telemetry.rxErrors
-                << "\n";
-
-            std::cout
-                << "TX Errors : "
-                << telemetry.txErrors
-                << "\n";
-
-            std::cout
-                << "RX Drops  : "
-                << telemetry.rxDrops
-                << "\n";
-
-            std::cout
-                << "TX Drops  : "
-                << telemetry.txDrops
                 << "\n";
         }
 
 
-        // ============================================
+        // ==========================================
         // HEARTBEAT
-        // ============================================
+        // ==========================================
 
         else if (
             message.rfind(
@@ -394,47 +396,46 @@ void handleClient(
                         connectedAgentId,
                         state))
                 {
+                    AgentStatus previousStatus =
+                        state.status;
+
                     state.lastSeen =
                         std::chrono::system_clock::now();
 
-                    state.connected =
-                        true;
+                    state.status =
+                        AgentStatus::HEALTHY;
 
                     agentRegistry.updateAgent(
                         state
                     );
+
+
+                    if (previousStatus ==
+                        AgentStatus::SUSPECTED)
+                    {
+                        std::cout
+                            << "\n[RECOVERY] "
+                            << connectedAgentId
+                            << " is HEALTHY again.\n";
+                    }
                 }
             }
 
             std::cout
-                << "\nHEARTBEAT received from ";
-
-            if (connectedAgentId.empty())
-            {
-                std::cout
-                    << clientIP;
-            }
-            else
-            {
-                std::cout
-                    << connectedAgentId;
-            }
-
-            std::cout
+                << "HEARTBEAT received from "
+                << connectedAgentId
                 << ".\n";
         }
 
 
-        // ============================================
+        // ==========================================
         // UNKNOWN MESSAGE
-        // ============================================
+        // ==========================================
 
         else
         {
             std::cout
-                << "\nUnknown message from "
-                << clientIP
-                << ":\n"
+                << "Unknown message: "
                 << message
                 << "\n";
         }
@@ -442,19 +443,40 @@ void handleClient(
 
 
     // ------------------------------------------------
-    // Connection ended
+    // TCP connection lost
+    // ------------------------------------------------
+    //
+    // Don't immediately mark OFFLINE.
+    // First mark SUSPECTED and let the
+    // failure detector decide when to mark
+    // the agent OFFLINE.
     // ------------------------------------------------
 
     if (!connectedAgentId.empty())
     {
-        agentRegistry.markDisconnected(
-            connectedAgentId
-        );
+        AgentState state{};
 
-        std::cout
-            << "Agent "
-            << connectedAgentId
-            << " marked disconnected.\n";
+        if (agentRegistry.getAgent(
+                connectedAgentId,
+                state))
+        {
+            state.status =
+                AgentStatus::SUSPECTED;
+
+            state.lastSeen =
+                std::chrono::system_clock::now();
+
+            agentRegistry.updateAgent(
+                state
+            );
+
+
+            std::cout
+                << "\n⚠ Agent "
+                << connectedAgentId
+                << " marked SUSPECTED "
+                   "after connection loss.\n";
+        }
     }
 
 
@@ -468,10 +490,6 @@ void handleClient(
 
 int main()
 {
-    // ----------------------------------------------
-    // Create TCP socket
-    // ----------------------------------------------
-
     int serverSocket =
         socket(
             AF_INET,
@@ -488,31 +506,16 @@ int main()
     }
 
 
-    // ----------------------------------------------
-    // Allow address reuse
-    // ----------------------------------------------
-
     int option = 1;
 
-    if (setsockopt(
-            serverSocket,
-            SOL_SOCKET,
-            SO_REUSEADDR,
-            &option,
-            sizeof(option)) < 0)
-    {
-        std::cerr
-            << "Error: setsockopt failed.\n";
+    setsockopt(
+        serverSocket,
+        SOL_SOCKET,
+        SO_REUSEADDR,
+        &option,
+        sizeof(option)
+    );
 
-        close(serverSocket);
-
-        return 1;
-    }
-
-
-    // ----------------------------------------------
-    // Server address
-    // ----------------------------------------------
 
     sockaddr_in serverAddress{};
 
@@ -525,10 +528,6 @@ int main()
     serverAddress.sin_port =
         htons(PORT);
 
-
-    // ----------------------------------------------
-    // Bind
-    // ----------------------------------------------
 
     if (bind(
             serverSocket,
@@ -545,10 +544,6 @@ int main()
     }
 
 
-    // ----------------------------------------------
-    // Listen
-    // ----------------------------------------------
-
     if (listen(
             serverSocket,
             20) < 0)
@@ -561,10 +556,6 @@ int main()
         return 1;
     }
 
-
-    // ----------------------------------------------
-    // Startup
-    // ----------------------------------------------
 
     std::cout
         << "\n========================================\n";
@@ -584,18 +575,20 @@ int main()
         << "\n";
 
     std::cout
-        << "Heartbeat timeout: "
-        << HEARTBEAT_TIMEOUT_SECONDS
+        << "Suspect timeout: "
+        << SUSPECT_TIMEOUT_SECONDS
+        << " seconds\n";
+
+    std::cout
+        << "Offline timeout: "
+        << OFFLINE_TIMEOUT_SECONDS
         << " seconds\n";
 
     std::cout
         << "\nWaiting for agents...\n";
 
 
-    // ----------------------------------------------
-    // Start background health monitor
-    // ----------------------------------------------
-
+    // Start failure detector
     std::thread monitorThread(
         monitorAgents
     );
@@ -603,10 +596,7 @@ int main()
     monitorThread.detach();
 
 
-    // ----------------------------------------------
-    // Accept agents
-    // ----------------------------------------------
-
+    // Accept multiple agents
     while (true)
     {
         sockaddr_in clientAddress{};
@@ -632,10 +622,6 @@ int main()
             continue;
         }
 
-
-        // ------------------------------------------
-        // Create a handler thread
-        // ------------------------------------------
 
         std::thread clientThread(
             handleClient,

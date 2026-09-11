@@ -4,6 +4,15 @@
 #include <string>
 #include <chrono>
 
+
+enum class AgentStatus
+{
+    HEALTHY,
+    SUSPECTED,
+    OFFLINE
+};
+
+
 struct AgentState
 {
     std::string agentId;
@@ -30,7 +39,7 @@ struct AgentState
 
     std::chrono::system_clock::time_point lastSeen;
 
-    bool connected = false;
+    AgentStatus status = AgentStatus::OFFLINE;
 };
 
 #endif

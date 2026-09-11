@@ -12,22 +12,6 @@ void AgentRegistry::updateAgent(
 }
 
 
-void AgentRegistry::markDisconnected(
-    const std::string& agentId)
-{
-    std::lock_guard<std::mutex> lock(
-        registryMutex
-    );
-
-    auto it = agents.find(agentId);
-
-    if (it != agents.end())
-    {
-        it->second.connected = false;
-    }
-}
-
-
 bool AgentRegistry::getAgent(
     const std::string& agentId,
     AgentState& state)
@@ -36,7 +20,8 @@ bool AgentRegistry::getAgent(
         registryMutex
     );
 
-    auto it = agents.find(agentId);
+    auto it =
+        agents.find(agentId);
 
     if (it == agents.end())
     {
@@ -57,4 +42,26 @@ AgentRegistry::getAllAgents()
     );
 
     return agents;
+}
+
+
+bool AgentRegistry::setStatus(
+    const std::string& agentId,
+    AgentStatus status)
+{
+    std::lock_guard<std::mutex> lock(
+        registryMutex
+    );
+
+    auto it =
+        agents.find(agentId);
+
+    if (it == agents.end())
+    {
+        return false;
+    }
+
+    it->second.status = status;
+
+    return true;
 }
