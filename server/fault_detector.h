@@ -2,8 +2,10 @@
 #define FAULT_DETECTOR_H
 
 #include <string>
+#include <vector>
 
 #include "agent_state.h"
+
 
 enum class FaultSeverity
 {
@@ -11,6 +13,7 @@ enum class FaultSeverity
     WARNING,
     CRITICAL
 };
+
 
 struct FaultEvent
 {
@@ -22,12 +25,14 @@ struct FaultEvent
     FaultSeverity severity;
 };
 
-void evaluateFaults(
-    const AgentState& state
-);
 
 const char* severityToString(
     FaultSeverity severity
+);
+
+
+std::vector<FaultEvent> evaluateFaults(
+    const AgentState& state
 );
 
 #endif
