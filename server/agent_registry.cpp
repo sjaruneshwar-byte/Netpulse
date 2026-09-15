@@ -1,6 +1,5 @@
 #include "agent_registry.h"
 
-
 void AgentRegistry::updateAgent(
     const AgentState& state)
 {

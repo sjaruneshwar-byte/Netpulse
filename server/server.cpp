@@ -64,7 +64,7 @@ const char* statusToString(
 
 
 // --------------------------------------------------
-// Monitor all registered agents
+// Background failure detector
 // --------------------------------------------------
 
 void monitorAgents()
@@ -75,8 +75,10 @@ void monitorAgents()
             std::chrono::seconds(1)
         );
 
+
         auto agents =
             agentRegistry.getAllAgents();
+
 
         auto now =
             std::chrono::system_clock::now();
@@ -113,6 +115,12 @@ void monitorAgents()
                     SUSPECT_TIMEOUT_SECONDS)
             {
                 agentRegistry.setStatus(
+                    state.agentId,
+                    AgentStatus::SUSPECTED
+                );
+
+
+                database.updateAgentStatus(
                     state.agentId,
                     AgentStatus::SUSPECTED
                 );
@@ -164,6 +172,12 @@ void monitorAgents()
                     OFFLINE_TIMEOUT_SECONDS)
             {
                 agentRegistry.setStatus(
+                    state.agentId,
+                    AgentStatus::OFFLINE
+                );
+
+
+                database.updateAgentStatus(
                     state.agentId,
                     AgentStatus::OFFLINE
                 );
@@ -250,7 +264,7 @@ void handleClient(
 
 
     // ------------------------------------------------
-    // Receive messages
+    // Receive messages from this agent
     // ------------------------------------------------
 
     while (true)
@@ -302,20 +316,29 @@ void handleClient(
 
             AgentState state{};
 
+
             state.agentId =
                 connectedAgentId;
+
 
             state.clientIP =
                 clientIP;
 
+
             state.lastSeen =
                 std::chrono::system_clock::now();
+
 
             state.status =
                 AgentStatus::HEALTHY;
 
 
             agentRegistry.updateAgent(
+                state
+            );
+
+
+            database.saveAgentState(
                 state
             );
 
@@ -361,65 +384,95 @@ void handleClient(
 
             AgentState state{};
 
+
             state.agentId =
                 telemetry.agentId;
+
 
             state.hostname =
                 telemetry.hostname;
 
+
             state.clientIP =
                 clientIP;
+
 
             state.cpuUsage =
                 telemetry.cpuUsage;
 
+
             state.memoryUsage =
                 telemetry.memoryUsage;
+
 
             state.uptime =
                 telemetry.uptime;
 
+
             state.interfaceName =
                 telemetry.interfaceName;
+
 
             state.rxBytesPerSecond =
                 telemetry.rxBytesPerSecond;
 
+
             state.txBytesPerSecond =
                 telemetry.txBytesPerSecond;
+
 
             state.rxPacketsPerSecond =
                 telemetry.rxPacketsPerSecond;
 
+
             state.txPacketsPerSecond =
                 telemetry.txPacketsPerSecond;
+
 
             state.rxErrors =
                 telemetry.rxErrors;
 
+
             state.txErrors =
                 telemetry.txErrors;
+
 
             state.rxDrops =
                 telemetry.rxDrops;
 
+
             state.txDrops =
                 telemetry.txDrops;
 
+
             state.lastSeen =
                 std::chrono::system_clock::now();
+
 
             state.status =
                 AgentStatus::HEALTHY;
 
 
             // ----------------------------------------
-            // Update registry
+            // Update in-memory registry
             // ----------------------------------------
 
             agentRegistry.updateAgent(
                 state
             );
+
+
+            // ----------------------------------------
+            // Update persistent agent state
+            // ----------------------------------------
+
+            if (!database.saveAgentState(
+                    state))
+            {
+                std::cerr
+                    << "Warning: Failed to save "
+                       "agent state.\n";
+            }
 
 
             // ----------------------------------------
@@ -435,7 +488,8 @@ void handleClient(
             else
             {
                 std::cerr
-                    << "Warning: Failed to save telemetry.\n";
+                    << "Warning: Failed to save "
+                       "telemetry.\n";
             }
 
 
@@ -444,7 +498,9 @@ void handleClient(
             // ----------------------------------------
 
             std::vector<FaultEvent> faults =
-                evaluateFaults(state);
+                evaluateFaults(
+                    state
+                );
 
 
             for (const auto& fault : faults)
@@ -497,7 +553,8 @@ void handleClient(
                 else
                 {
                     std::cerr
-                        << "Warning: Failed to save fault event.\n";
+                        << "Warning: Failed to save "
+                           "fault event.\n";
                 }
             }
 
@@ -517,49 +574,59 @@ void handleClient(
             std::cout
                 << "----------------------------------------\n";
 
+
             std::cout
                 << std::fixed
                 << std::setprecision(2);
+
 
             std::cout
                 << "CPU       : "
                 << telemetry.cpuUsage
                 << " %\n";
 
+
             std::cout
                 << "Memory    : "
                 << telemetry.memoryUsage
                 << " %\n";
+
 
             std::cout
                 << "Interface : "
                 << telemetry.interfaceName
                 << "\n";
 
+
             std::cout
                 << "RX Rate   : "
                 << telemetry.rxBytesPerSecond
                 << " B/s\n";
+
 
             std::cout
                 << "TX Rate   : "
                 << telemetry.txBytesPerSecond
                 << " B/s\n";
 
+
             std::cout
                 << "RX Errors : "
                 << telemetry.rxErrors
                 << "\n";
+
 
             std::cout
                 << "TX Errors : "
                 << telemetry.txErrors
                 << "\n";
 
+
             std::cout
                 << "RX Drops  : "
                 << telemetry.rxDrops
                 << "\n";
+
 
             std::cout
                 << "TX Drops  : "
@@ -593,11 +660,17 @@ void handleClient(
                     state.lastSeen =
                         std::chrono::system_clock::now();
 
+
                     state.status =
                         AgentStatus::HEALTHY;
 
 
                     agentRegistry.updateAgent(
+                        state
+                    );
+
+
+                    database.saveAgentState(
                         state
                     );
 
@@ -653,11 +726,17 @@ void handleClient(
             state.status =
                 AgentStatus::SUSPECTED;
 
+
             state.lastSeen =
                 std::chrono::system_clock::now();
 
 
             agentRegistry.updateAgent(
+                state
+            );
+
+
+            database.saveAgentState(
                 state
             );
 
@@ -696,7 +775,7 @@ int main()
 
 
     // ----------------------------------------------
-    // Create server socket
+    // Create TCP socket
     // ----------------------------------------------
 
     int serverSocket =
@@ -717,7 +796,7 @@ int main()
 
 
     // ----------------------------------------------
-    // Allow address reuse
+    // Address reuse
     // ----------------------------------------------
 
     int option = 1;
@@ -740,16 +819,19 @@ int main()
 
 
     // ----------------------------------------------
-    // Configure server address
+    // Server address
     // ----------------------------------------------
 
     sockaddr_in serverAddress{};
 
+
     serverAddress.sin_family =
         AF_INET;
 
+
     serverAddress.sin_addr.s_addr =
         INADDR_ANY;
+
 
     serverAddress.sin_port =
         htons(PORT);
@@ -804,23 +886,28 @@ int main()
     std::cout
         << "========================================\n\n";
 
+
     std::cout
         << "SQLite database : netpulse.db\n";
+
 
     std::cout
         << "Listening on port: "
         << PORT
         << "\n";
 
+
     std::cout
         << "Suspect timeout : "
         << SUSPECT_TIMEOUT_SECONDS
         << " seconds\n";
 
+
     std::cout
         << "Offline timeout : "
         << OFFLINE_TIMEOUT_SECONDS
         << " seconds\n";
+
 
     std::cout
         << "\nWaiting for agents...\n";
@@ -834,6 +921,7 @@ int main()
         monitorAgents
     );
 
+
     monitorThread.detach();
 
 
@@ -844,6 +932,7 @@ int main()
     while (true)
     {
         sockaddr_in clientAddress{};
+
 
         socklen_t clientLength =
             sizeof(clientAddress);
