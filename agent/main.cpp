@@ -76,12 +76,42 @@ int main(int argc, char* argv[])
 
     std::string agentId = "NODE_01";
 
-    if (argc > 1)
+    bool agentIdProvided = false;
+
+    bool simulateNetworkFault = false;
+
+
+    // ----------------------------------------------
+    // Parse command-line arguments
+    //
+    // Examples:
+    //
+    // ./agent
+    // ./agent NODE_01
+    // ./agent NODE_01 --simulate-network-fault
+    // ./agent --simulate-network-fault
+    // ----------------------------------------------
+
+    for (int i = 1; i < argc; ++i)
     {
-        agentId = argv[1];
+        std::string argument = argv[i];
+
+        if (argument ==
+            "--simulate-network-fault")
+        {
+            simulateNetworkFault = true;
+        }
+        else if (!agentIdProvided)
+        {
+            agentId = argument;
+
+            agentIdProvided = true;
+        }
     }
 
-    const std::string serverIP = "127.0.0.1";
+
+    const std::string serverIP =
+        "127.0.0.1";
 
     const int serverPort = 9000;
 
@@ -134,15 +164,27 @@ int main(int argc, char* argv[])
         << "Platform  : Linux / WSL2\n";
 
 
+    if (simulateNetworkFault)
+    {
+        std::cout
+            << "Fault Simulation : NETWORK FAULT ENABLED\n";
+    }
+    else
+    {
+        std::cout
+            << "Fault Simulation : OFF\n";
+    }
+
+
     // ----------------------------------------------
-    // Create persistent TCP client
+    // Create TCP client
     // ----------------------------------------------
 
     TcpClient tcpClient;
 
 
     // ----------------------------------------------
-    // Connect to monitoring server
+    // Connect to server
     // ----------------------------------------------
 
     std::cout << "\n";
@@ -153,12 +195,14 @@ int main(int argc, char* argv[])
     std::cout
         << "----------------------------------------\n";
 
+
     bool serverConnected =
         tcpClient.connectToServer(
             serverIP,
             serverPort,
             agentId
         );
+
 
     if (!serverConnected)
     {
@@ -177,8 +221,10 @@ int main(int argc, char* argv[])
 
     std::atomic<bool> heartbeatRunning(true);
 
+
     std::thread heartbeatThread(
-        [&tcpClient, &heartbeatRunning, &agentId]()
+        [&tcpClient,
+         &heartbeatRunning]()
         {
             while (heartbeatRunning)
             {
@@ -186,18 +232,17 @@ int main(int argc, char* argv[])
                     std::chrono::seconds(2)
                 );
 
+
                 if (!heartbeatRunning)
                 {
                     break;
                 }
 
+
                 if (tcpClient.isConnected())
                 {
-                    std::string heartbeat =
-                        "HEARTBEAT AGENT=" + agentId;
-
                     if (tcpClient.sendMessage(
-                            heartbeat))
+                            "HEARTBEAT"))
                     {
                         std::cout
                             << "\nHeartbeat sent.\n";
@@ -205,7 +250,8 @@ int main(int argc, char* argv[])
                     else
                     {
                         std::cerr
-                            << "\nWarning: Failed to send heartbeat.\n";
+                            << "\nWarning: Failed to "
+                               "send heartbeat.\n";
                     }
                 }
             }
@@ -214,7 +260,7 @@ int main(int argc, char* argv[])
 
 
     // ----------------------------------------------
-    // Continuous monitoring loop
+    // Continuous monitoring
     // ----------------------------------------------
 
     while (true)
@@ -226,8 +272,10 @@ int main(int argc, char* argv[])
         double cpuUsage =
             getCpuUsage();
 
+
         double memoryUsage =
             getMemoryUsage();
+
 
         std::string uptime =
             getUptime();
@@ -237,14 +285,15 @@ int main(int argc, char* argv[])
             memoryUsage < 0)
         {
             std::cerr
-                << "Error: Could not read system metrics.\n";
+                << "Error: Could not read "
+                   "system metrics.\n";
 
             break;
         }
 
 
         // ==========================================
-        // DISPLAY SYSTEM METRICS
+        // DISPLAY SYSTEM STATUS
         // ==========================================
 
         std::cout << "\n";
@@ -258,19 +307,23 @@ int main(int argc, char* argv[])
         std::cout
             << "========================================\n";
 
+
         std::cout
             << std::fixed
             << std::setprecision(2);
+
 
         std::cout
             << "CPU Usage    : "
             << cpuUsage
             << " %\n";
 
+
         std::cout
             << "Memory Usage : "
             << memoryUsage
             << " %\n";
+
 
         std::cout
             << "Uptime       : "
@@ -286,6 +339,7 @@ int main(int argc, char* argv[])
             previousStats =
                 getNetworkStats();
 
+
         auto startTime =
             std::chrono::steady_clock::now();
 
@@ -295,7 +349,7 @@ int main(int argc, char* argv[])
 
 
         // ==========================================
-        // WAIT
+        // NETWORK SAMPLING INTERVAL
         // ==========================================
 
         std::this_thread::sleep_for(
@@ -311,12 +365,13 @@ int main(int argc, char* argv[])
             currentStats =
                 getNetworkStats();
 
+
         auto endTime =
             std::chrono::steady_clock::now();
 
 
         // ==========================================
-        // ACTUAL ELAPSED TIME
+        // ELAPSED TIME
         // ==========================================
 
         double elapsedSeconds =
@@ -362,45 +417,54 @@ int main(int argc, char* argv[])
             {
                 std::cout << "\n";
 
+
                 std::cout
                     << "Interface : "
                     << rate.interfaceName
                     << "\n";
+
 
                 printDataRate(
                     "RX Rate   : ",
                     rate.rxBytesPerSecond
                 );
 
+
                 printDataRate(
                     "TX Rate   : ",
                     rate.txBytesPerSecond
                 );
+
 
                 std::cout
                     << "RX Packets: "
                     << rate.rxPacketsPerSecond
                     << " pkt/s\n";
 
+
                 std::cout
                     << "TX Packets: "
                     << rate.txPacketsPerSecond
                     << " pkt/s\n";
+
 
                 std::cout
                     << "RX Errors : "
                     << rate.rxErrors
                     << "\n";
 
+
                 std::cout
                     << "TX Errors : "
                     << rate.txErrors
                     << "\n";
 
+
                 std::cout
                     << "RX Drops  : "
                     << rate.rxDrops
                     << "\n";
+
 
                 std::cout
                     << "TX Drops  : "
@@ -409,7 +473,7 @@ int main(int argc, char* argv[])
 
 
                 // ==================================
-                // SEND FULL TELEMETRY
+                // SEND TELEMETRY
                 // ==================================
 
                 if (tcpClient.isConnected())
@@ -428,6 +492,10 @@ int main(int argc, char* argv[])
                     unsigned long long txDrops = 0;
 
 
+                    // ----------------------------------
+                    // Real Linux counters
+                    // ----------------------------------
+
                     if (rawStats != nullptr)
                     {
                         rxErrors =
@@ -444,12 +512,35 @@ int main(int argc, char* argv[])
                     }
 
 
+                    // ----------------------------------
+                    // Fault simulation
+                    //
+                    // This changes ONLY the telemetry
+                    // values sent to NetPulse.
+                    //
+                    // It does NOT change the actual
+                    // Linux interface counters.
+                    // ----------------------------------
+
+                    if (simulateNetworkFault)
+                    {
+                        rxErrors = 10;
+
+                        txErrors = 5;
+
+                        rxDrops = 25;
+
+                        txDrops = 10;
+                    }
+
+
                     // ==================================
                     // Generate Unix timestamp
                     // ==================================
 
                     auto currentTime =
                         std::chrono::system_clock::now();
+
 
                     long long timestamp =
                         std::chrono::duration_cast<
@@ -466,6 +557,7 @@ int main(int argc, char* argv[])
                     std::string encodedUptime =
                         uptime;
 
+
                     for (char& c : encodedUptime)
                     {
                         if (c == ' ')
@@ -476,7 +568,7 @@ int main(int argc, char* argv[])
 
 
                     // ==================================
-                    // Create telemetry message
+                    // Create telemetry
                     // ==================================
 
                     std::string telemetry =
@@ -511,6 +603,20 @@ int main(int argc, char* argv[])
                                "for interface "
                             << rate.interfaceName
                             << ".\n";
+
+
+                        if (simulateNetworkFault)
+                        {
+                            std::cout
+                                << "SIMULATED NETWORK FAULT "
+                                   "TELEMETRY SENT\n";
+
+                            std::cout
+                                << "RX_ERRORS=10 "
+                                   "TX_ERRORS=5 "
+                                   "RX_DROPS=25 "
+                                   "TX_DROPS=10\n";
+                        }
                     }
                     else
                     {
@@ -534,12 +640,15 @@ int main(int argc, char* argv[])
 
     heartbeatRunning = false;
 
+
     if (heartbeatThread.joinable())
     {
         heartbeatThread.join();
     }
 
+
     tcpClient.disconnect();
+
 
     return 0;
 }

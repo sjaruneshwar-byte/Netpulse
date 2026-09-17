@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>NetPulse Monitoring Dashboard</title>
+
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <h1>NetPulse</h1>
+
+        <p>Distributed Network Monitoring</p>
+      </div>
+
+      <div class="topbar-right">
+        <div id="apiStatus" class="api-status offline">● API OFFLINE</div>
+
+        <div id="lastUpdated" class="last-updated">Not updated</div>
+      </div>
+    </header>
+
+    <main class="container">
+      <!-- =========================================
+         SUMMARY
+         ========================================= -->
+
+      <section class="summary-grid">
+        <div class="summary-card">
+          <span class="summary-label"> Total Agents </span>
+
+          <strong id="totalAgents"> 0 </strong>
+        </div>
+
+        <div class="summary-card healthy-card">
+          <span class="summary-label"> Healthy </span>
+
+          <strong id="healthyAgents"> 0 </strong>
+        </div>
+
+        <div class="summary-card suspected-card">
+          <span class="summary-label"> Suspected </span>
+
+          <strong id="suspectedAgents"> 0 </strong>
+        </div>
+
+        <div class="summary-card offline-card">
+          <span class="summary-label"> Offline </span>
+
+          <strong id="offlineAgents"> 0 </strong>
+        </div>
+
+        <div class="summary-card">
+          <span class="summary-label"> Fault Events </span>
+
+          <strong id="faultCount"> 0 </strong>
+        </div>
+
+        <div class="summary-card">
+          <span class="summary-label"> Telemetry Records </span>
+
+          <strong id="telemetryCount"> 0 </strong>
+        </div>
+      </section>
+
+      <!-- =========================================
+         AGENTS
+         ========================================= -->
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Agents</h2>
+
+            <p class="section-description">Current status of monitored nodes</p>
+          </div>
+        </div>
+
+        <div id="agentCards" class="agent-grid">
+          <div class="loading">Loading agents...</div>
+        </div>
+      </section>
+
+      <!-- =========================================
+         NETWORK TOPOLOGY
+         ========================================= -->
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Network Topology</h2>
+
+            <p class="section-description">Logical monitoring topology</p>
+          </div>
+        </div>
+
+        <div id="topologyContainer" class="topology-container">
+          <div class="loading">Loading topology...</div>
+        </div>
+      </section>
+
+      <!-- =========================================
+         HISTORICAL TELEMETRY
+         ========================================= -->
+
+      <section class="panel">
+        <div class="panel-header chart-header">
+          <div>
+            <h2>Historical Telemetry</h2>
+
+            <p class="section-description">
+              Historical performance of a selected agent
+            </p>
+          </div>
+
+          <select id="agentSelector" class="agent-selector">
+            <option value="">Select an agent</option>
+          </select>
+        </div>
+
+        <div class="charts-grid">
+          <div class="chart-card">
+            <div class="chart-title-row">
+              <h3>CPU & Memory</h3>
+
+              <span class="chart-unit"> % </span>
+            </div>
+
+            <canvas id="systemChart" width="1000" height="380"></canvas>
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-title-row">
+              <h3>Network Traffic</h3>
+
+              <span class="chart-unit"> B/s </span>
+            </div>
+
+            <canvas id="networkChart" width="1000" height="380"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- =========================================
+         RECENT TELEMETRY
+         ========================================= -->
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Recent Telemetry</h2>
+
+            <p class="section-description">
+              Latest measurements received from agents
+            </p>
+          </div>
+        </div>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Agent</th>
+
+                <th>Interface</th>
+
+                <th>CPU</th>
+
+                <th>Memory</th>
+
+                <th>RX B/s</th>
+
+                <th>TX B/s</th>
+
+                <th>RX Errors</th>
+
+                <th>TX Errors</th>
+
+                <th>RX Drops</th>
+
+                <th>TX Drops</th>
+              </tr>
+            </thead>
+
+            <tbody id="telemetryTable">
+              <tr>
+                <td colspan="10" class="loading">Loading telemetry...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- =========================================
+         RECENT FAULTS
+         ========================================= -->
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Recent Faults</h2>
+
+            <p class="section-description">
+              Detected and resolved network/system events
+            </p>
+          </div>
+        </div>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+
+                <th>Agent</th>
+
+                <th>Interface</th>
+
+                <th>Fault</th>
+
+                <th>Severity</th>
+
+                <th>Description</th>
+              </tr>
+            </thead>
+
+            <tbody id="faultTable">
+              <tr>
+                <td colspan="6" class="loading">Loading faults...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -3,6 +3,8 @@
 
 #include <string>
 #include <vector>
+#include <unordered_map>
+#include <mutex>
 
 #include "agent_state.h"
 
@@ -26,6 +28,13 @@ struct FaultEvent
 };
 
 
+struct FaultUpdateResult
+{
+    std::vector<FaultEvent> newFaults;
+    std::vector<FaultEvent> resolvedFaults;
+};
+
+
 const char* severityToString(
     FaultSeverity severity
 );
@@ -34,5 +43,32 @@ const char* severityToString(
 std::vector<FaultEvent> evaluateFaults(
     const AgentState& state
 );
+
+
+class FaultTracker
+{
+public:
+
+    FaultUpdateResult update(
+        const AgentState& state
+    );
+
+    void clearAgent(
+        const std::string& agentId
+    );
+
+private:
+
+    std::string makeKey(
+        const FaultEvent& fault
+    ) const;
+
+    std::unordered_map<
+        std::string,
+        FaultEvent
+    > activeFaults;
+
+    std::mutex faultMutex;
+};
 
 #endif

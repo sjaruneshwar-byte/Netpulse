@@ -39,9 +39,11 @@ AgentRegistry agentRegistry;
 
 Database database;
 
+FaultTracker faultTracker;
+
 
 // --------------------------------------------------
-// Convert status to string
+// Convert agent status to text
 // --------------------------------------------------
 
 const char* statusToString(
@@ -75,10 +77,8 @@ void monitorAgents()
             std::chrono::seconds(1)
         );
 
-
         auto agents =
             agentRegistry.getAllAgents();
-
 
         auto now =
             std::chrono::system_clock::now();
@@ -90,12 +90,20 @@ void monitorAgents()
                 entry.second;
 
 
+            // --------------------------------------
+            // Already offline
+            // --------------------------------------
+
             if (state.status ==
                 AgentStatus::OFFLINE)
             {
                 continue;
             }
 
+
+            // --------------------------------------
+            // Calculate time since last message
+            // --------------------------------------
 
             auto elapsed =
                 std::chrono::duration_cast<
@@ -232,6 +240,10 @@ void handleClient(
     char clientIP[INET_ADDRSTRLEN];
 
 
+    // ----------------------------------------------
+    // Convert client IP to string
+    // ----------------------------------------------
+
     if (inet_ntop(
             AF_INET,
             &clientAddress.sin_addr,
@@ -260,11 +272,12 @@ void handleClient(
         << "\n";
 
 
+    // Agent ID becomes known after HELLO.
     std::string connectedAgentId;
 
 
     // ------------------------------------------------
-    // Receive messages from this agent
+    // Receive messages continuously
     // ------------------------------------------------
 
     while (true)
@@ -306,13 +319,18 @@ void handleClient(
                     response))
             {
                 std::cerr
-                    << "Error: Failed to send WELCOME to "
+                    << "Error: Failed to send WELCOME "
+                       "to "
                     << connectedAgentId
                     << ".\n";
 
                 break;
             }
 
+
+            // ----------------------------------------
+            // Create initial agent state
+            // ----------------------------------------
 
             AgentState state{};
 
@@ -333,14 +351,26 @@ void handleClient(
                 AgentStatus::HEALTHY;
 
 
+            // ----------------------------------------
+            // Update memory registry
+            // ----------------------------------------
+
             agentRegistry.updateAgent(
                 state
             );
 
 
-            database.saveAgentState(
-                state
-            );
+            // ----------------------------------------
+            // Persist agent state
+            // ----------------------------------------
+
+            if (!database.saveAgentState(
+                    state))
+            {
+                std::cerr
+                    << "Warning: Failed to save "
+                       "initial agent state.\n";
+            }
 
 
             std::cout
@@ -350,6 +380,9 @@ void handleClient(
 
             std::cout
                 << "Agent registered as HEALTHY.\n";
+
+            std::cout
+                << "WELCOME sent.\n";
         }
 
 
@@ -365,6 +398,10 @@ void handleClient(
             ParsedTelemetry telemetry{};
 
 
+            // ----------------------------------------
+            // Parse telemetry
+            // ----------------------------------------
+
             if (!parseTelemetry(
                     message,
                     telemetry))
@@ -379,7 +416,7 @@ void handleClient(
 
 
             // ----------------------------------------
-            // Build agent state
+            // Build AgentState
             // ----------------------------------------
 
             AgentState state{};
@@ -454,7 +491,7 @@ void handleClient(
 
 
             // ----------------------------------------
-            // Update in-memory registry
+            // Update agent registry
             // ----------------------------------------
 
             agentRegistry.updateAgent(
@@ -463,7 +500,7 @@ void handleClient(
 
 
             // ----------------------------------------
-            // Update persistent agent state
+            // Persist agent state
             // ----------------------------------------
 
             if (!database.saveAgentState(
@@ -476,7 +513,7 @@ void handleClient(
 
 
             // ----------------------------------------
-            // Save telemetry
+            // Persist telemetry
             // ----------------------------------------
 
             if (database.saveTelemetry(
@@ -494,16 +531,21 @@ void handleClient(
 
 
             // ----------------------------------------
-            // Detect faults
+            // Fault detection with deduplication
             // ----------------------------------------
 
-            std::vector<FaultEvent> faults =
-                evaluateFaults(
+            FaultUpdateResult faultUpdate =
+                faultTracker.update(
                     state
                 );
 
 
-            for (const auto& fault : faults)
+            // ----------------------------------------
+            // Newly detected faults
+            // ----------------------------------------
+
+            for (const auto& fault :
+                 faultUpdate.newFaults)
             {
                 std::cout
                     << "\n========================================\n";
@@ -548,13 +590,73 @@ void handleClient(
                         fault))
                 {
                     std::cout
-                        << "Fault event saved to SQLite.\n";
+                        << "New fault event saved "
+                           "to SQLite.\n";
                 }
                 else
                 {
                     std::cerr
                         << "Warning: Failed to save "
                            "fault event.\n";
+                }
+            }
+
+
+            // ----------------------------------------
+            // Resolved faults
+            // ----------------------------------------
+
+            for (const auto& fault :
+                 faultUpdate.resolvedFaults)
+            {
+                std::cout
+                    << "\n========================================\n";
+
+                std::cout
+                    << "FAULT RESOLVED\n";
+
+                std::cout
+                    << "========================================\n";
+
+                std::cout
+                    << "Agent      : "
+                    << fault.agentId
+                    << "\n";
+
+                std::cout
+                    << "Interface  : "
+                    << fault.interfaceName
+                    << "\n";
+
+                std::cout
+                    << "Fault Type : "
+                    << fault.faultType
+                    << "\n";
+
+                std::cout
+                    << "Severity   : INFO\n";
+
+                std::cout
+                    << "Description: "
+                    << fault.description
+                    << "\n";
+
+                std::cout
+                    << "========================================\n";
+
+
+                if (database.saveFault(
+                        fault))
+                {
+                    std::cout
+                        << "Fault resolution saved "
+                           "to SQLite.\n";
+                }
+                else
+                {
+                    std::cerr
+                        << "Warning: Failed to save "
+                           "fault resolution.\n";
                 }
             }
 
@@ -665,18 +767,36 @@ void handleClient(
                         AgentStatus::HEALTHY;
 
 
+                    // ------------------------------
+                    // Update memory registry
+                    // ------------------------------
+
                     agentRegistry.updateAgent(
                         state
                     );
 
 
-                    database.saveAgentState(
-                        state
-                    );
+                    // ------------------------------
+                    // Persist state
+                    // ------------------------------
 
+                    if (!database.saveAgentState(
+                            state))
+                    {
+                        std::cerr
+                            << "Warning: Failed to "
+                               "save heartbeat state.\n";
+                    }
+
+
+                    // ------------------------------
+                    // Recovery
+                    // ------------------------------
 
                     if (previousStatus ==
-                        AgentStatus::SUSPECTED)
+                        AgentStatus::SUSPECTED ||
+                        previousStatus ==
+                        AgentStatus::OFFLINE)
                     {
                         std::cout
                             << "\n[RECOVERY] "
@@ -713,6 +833,11 @@ void handleClient(
     // ------------------------------------------------
     // Connection lost
     // ------------------------------------------------
+    //
+    // Do not immediately mark OFFLINE.
+    // Mark SUSPECTED first and let the background
+    // failure detector move it to OFFLINE.
+    // ------------------------------------------------
 
     if (!connectedAgentId.empty())
     {
@@ -736,9 +861,13 @@ void handleClient(
             );
 
 
-            database.saveAgentState(
-                state
-            );
+            if (!database.saveAgentState(
+                    state))
+            {
+                std::cerr
+                    << "Warning: Failed to save "
+                       "SUSPECTED agent state.\n";
+            }
 
 
             std::cout
@@ -796,7 +925,7 @@ int main()
 
 
     // ----------------------------------------------
-    // Address reuse
+    // Allow address reuse
     // ----------------------------------------------
 
     int option = 1;
@@ -819,7 +948,7 @@ int main()
 
 
     // ----------------------------------------------
-    // Server address
+    // Configure server address
     // ----------------------------------------------
 
     sockaddr_in serverAddress{};
@@ -874,7 +1003,7 @@ int main()
 
 
     // ----------------------------------------------
-    // Startup
+    // Startup information
     // ----------------------------------------------
 
     std::cout
@@ -914,7 +1043,7 @@ int main()
 
 
     // ----------------------------------------------
-    // Start health monitor
+    // Start background failure detector
     // ----------------------------------------------
 
     std::thread monitorThread(
@@ -926,7 +1055,7 @@ int main()
 
 
     // ----------------------------------------------
-    // Accept agents
+    // Accept multiple agents
     // ----------------------------------------------
 
     while (true)
@@ -957,7 +1086,7 @@ int main()
 
 
         // ------------------------------------------
-        // Dedicated thread
+        // Dedicated handler thread
         // ------------------------------------------
 
         std::thread clientThread(
@@ -972,6 +1101,9 @@ int main()
 
         std::cout
             << "\nNew agent connection accepted.\n";
+
+        std::cout
+            << "Agent handler thread started.\n";
     }
 
 
