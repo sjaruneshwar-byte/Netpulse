@@ -1,5 +1,3 @@
-name: netpulse
-
 services:
 
   server:
@@ -10,7 +8,7 @@ services:
     container_name: netpulse-server
 
     ports:
-      - "9000:9000"
+      - "127.0.0.1:9000:9000"
 
     volumes:
       - netpulse_data:/app/server
@@ -26,7 +24,7 @@ services:
     container_name: netpulse-api
 
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
 
     volumes:
       - netpulse_data:/app/server
@@ -39,4 +37,3 @@ services:
 
 volumes:
   netpulse_data:
-
