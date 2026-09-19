@@ -4,50 +4,28 @@
 #include <iomanip>
 #include <thread>
 #include <chrono>
-#include <vector>
-
-#include <unistd.h>
+#include <sstream>
+#include <cctype>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <unistd.h>
 
 #include "../common/protocol.h"
-
 #include "telemetry_parser.h"
 #include "agent_registry.h"
 #include "fault_detector.h"
 #include "database.h"
+#include "input_validator.h"
 
-
-// --------------------------------------------------
-// Configuration
-// --------------------------------------------------
-
+namespace
+{
 constexpr int PORT = 9000;
-
 constexpr int SUSPECT_TIMEOUT_SECONDS = 4;
-
 constexpr int OFFLINE_TIMEOUT_SECONDS = 8;
 
-
-// --------------------------------------------------
-// Global components
-// --------------------------------------------------
-
-AgentRegistry agentRegistry;
-
-Database database;
-
-FaultTracker faultTracker;
-
-
-// --------------------------------------------------
-// Convert agent status to text
-// --------------------------------------------------
-
-const char* statusToString(
-    AgentStatus status)
+std::string statusToString(AgentStatus status)
 {
     switch (status)
     {
@@ -64,10 +42,82 @@ const char* statusToString(
     return "UNKNOWN";
 }
 
+std::string trim(const std::string& value)
+{
+    const std::size_t first = value.find_first_not_of(" \t\r\n");
 
-// --------------------------------------------------
-// Background failure detector
-// --------------------------------------------------
+    if (first == std::string::npos)
+    {
+        return "";
+    }
+
+    const std::size_t last = value.find_last_not_of(" \t\r\n");
+
+    return value.substr(first, last - first + 1);
+}
+
+std::string extractField(
+    const std::string& message,
+    const std::string& key
+)
+{
+    const std::string prefix = key + "=";
+
+    const std::size_t startPos = message.find(prefix);
+
+    if (startPos == std::string::npos)
+    {
+        return "";
+    }
+
+    std::size_t start = startPos + prefix.length();
+
+    std::size_t end = message.find(' ', start);
+
+    if (end == std::string::npos)
+    {
+        end = message.length();
+    }
+
+    return message.substr(start, end - start);
+}
+
+std::string extractHelloAgentId(const std::string& message)
+{
+    // Supports:
+    // HELLO NODE_01
+    // HELLO AGENT=NODE_01
+
+    std::string rest = trim(message.substr(5));
+
+    if (rest.empty())
+    {
+        return "";
+    }
+
+    const std::string agentField = extractField(rest, "AGENT");
+
+    if (!agentField.empty())
+    {
+        return agentField;
+    }
+
+    // If the message is simply:
+    // HELLO NODE_01
+    const std::size_t firstSpace = rest.find(' ');
+
+    if (firstSpace == std::string::npos)
+    {
+        return rest;
+    }
+
+    return trim(rest.substr(0, firstSpace));
+}
+}
+
+AgentRegistry agentRegistry;
+Database database;
+FaultTracker faultTracker;
 
 void monitorAgents()
 {
@@ -77,1017 +127,885 @@ void monitorAgents()
             std::chrono::seconds(1)
         );
 
-        auto agents =
-            agentRegistry.getAllAgents();
+        const auto agents = agentRegistry.getAllAgents();
 
-        auto now =
+        const auto now =
             std::chrono::system_clock::now();
 
+        // getAllAgents() returns:
+        // std::unordered_map<std::string, AgentState>
+        //
+        // Therefore each item is a pair:
+        // entry.first  -> agent ID
+        // entry.second -> AgentState
 
         for (const auto& entry : agents)
         {
-            const AgentState& state =
-                entry.second;
+            const AgentState& state = entry.second;
 
-
-            // --------------------------------------
-            // Already offline
-            // --------------------------------------
-
-            if (state.status ==
-                AgentStatus::OFFLINE)
+            if (state.status == AgentStatus::OFFLINE)
             {
                 continue;
             }
 
-
-            // --------------------------------------
-            // Calculate time since last message
-            // --------------------------------------
-
-            auto elapsed =
-                std::chrono::duration_cast<
-                    std::chrono::seconds
-                >(
+            const auto elapsed =
+                std::chrono::duration_cast<std::chrono::seconds>(
                     now - state.lastSeen
                 ).count();
 
-
-            // --------------------------------------
             // HEALTHY -> SUSPECTED
-            // --------------------------------------
-
-            if (state.status ==
-                    AgentStatus::HEALTHY &&
-                elapsed >=
-                    SUSPECT_TIMEOUT_SECONDS)
+            if (
+                state.status == AgentStatus::HEALTHY &&
+                elapsed >= SUSPECT_TIMEOUT_SECONDS
+            )
             {
                 agentRegistry.setStatus(
                     state.agentId,
                     AgentStatus::SUSPECTED
                 );
 
-
                 database.updateAgentStatus(
                     state.agentId,
                     AgentStatus::SUSPECTED
                 );
 
-
                 std::cout
-                    << "\n========================================\n";
-
-                std::cout
-                    << "AGENT SUSPECTED\n";
-
-                std::cout
-                    << "========================================\n";
-
-                std::cout
+                    << "\n----------------------------------------\n"
+                    << "AGENT SUSPECTED\n"
+                    << "----------------------------------------\n"
                     << "Agent     : "
                     << state.agentId
-                    << "\n";
-
-                std::cout
-                    << "Hostname  : "
-                    << state.hostname
-                    << "\n";
-
-                std::cout
+                    << "\n"
                     << "Last seen : "
                     << elapsed
-                    << " seconds ago\n";
-
-                std::cout
-                    << "Status    : "
-                    << statusToString(
-                           AgentStatus::SUSPECTED)
-                    << "\n";
-
-                std::cout
-                    << "========================================\n";
+                    << " seconds ago\n"
+                    << "Status    : SUSPECTED\n"
+                    << "----------------------------------------\n"
+                    << std::endl;
             }
 
-
-            // --------------------------------------
             // SUSPECTED -> OFFLINE
-            // --------------------------------------
-
             else if (
-                state.status ==
-                    AgentStatus::SUSPECTED &&
-                elapsed >=
-                    OFFLINE_TIMEOUT_SECONDS)
+                state.status == AgentStatus::SUSPECTED &&
+                elapsed >= OFFLINE_TIMEOUT_SECONDS
+            )
             {
                 agentRegistry.setStatus(
                     state.agentId,
                     AgentStatus::OFFLINE
                 );
 
-
                 database.updateAgentStatus(
                     state.agentId,
                     AgentStatus::OFFLINE
                 );
 
-
                 std::cout
-                    << "\n========================================\n";
-
-                std::cout
-                    << "AGENT OFFLINE\n";
-
-                std::cout
-                    << "========================================\n";
-
-                std::cout
+                    << "\n----------------------------------------\n"
+                    << "AGENT OFFLINE\n"
+                    << "----------------------------------------\n"
                     << "Agent     : "
                     << state.agentId
-                    << "\n";
-
-                std::cout
-                    << "Hostname  : "
-                    << state.hostname
-                    << "\n";
-
-                std::cout
+                    << "\n"
                     << "Last seen : "
                     << elapsed
-                    << " seconds ago\n";
-
-                std::cout
-                    << "Status    : "
-                    << statusToString(
-                           AgentStatus::OFFLINE)
-                    << "\n";
-
-                std::cout
-                    << "========================================\n";
+                    << " seconds ago\n"
+                    << "Status    : OFFLINE\n"
+                    << "----------------------------------------\n"
+                    << std::endl;
             }
         }
     }
 }
 
-
-// --------------------------------------------------
-// Handle one connected agent
-// --------------------------------------------------
-
 void handleClient(
     int clientSocket,
-    sockaddr_in clientAddress)
+    const sockaddr_in& clientAddress
+)
 {
-    char clientIP[INET_ADDRSTRLEN];
+    char clientIp[INET_ADDRSTRLEN] = {};
 
-
-    // ----------------------------------------------
-    // Convert client IP to string
-    // ----------------------------------------------
-
-    if (inet_ntop(
+    if (
+        inet_ntop(
             AF_INET,
             &clientAddress.sin_addr,
-            clientIP,
-            sizeof(clientIP)) == nullptr)
+            clientIp,
+            sizeof(clientIp)
+        ) == nullptr
+    )
     {
-        std::strcpy(
-            clientIP,
-            "Unknown"
+        std::strncpy(
+            clientIp,
+            "UNKNOWN",
+            sizeof(clientIp) - 1
         );
+
+        clientIp[sizeof(clientIp) - 1] = '\0';
     }
 
-
-    std::cout
-        << "\n========================================\n";
-
-    std::cout
-        << "AGENT CONNECTED\n";
-
-    std::cout
-        << "========================================\n";
-
-    std::cout
-        << "Client IP: "
-        << clientIP
-        << "\n";
-
-
-    // Agent ID becomes known after HELLO.
-    std::string connectedAgentId;
-
-
-    // ------------------------------------------------
-    // Receive messages continuously
-    // ------------------------------------------------
+    std::string agentId;
+    bool identified = false;
 
     while (true)
     {
         std::string message;
 
-
-        if (!receiveFramedMessage(
-                clientSocket,
-                message))
+        if (!receiveFramedMessage(clientSocket, message))
         {
-            std::cout
-                << "\nConnection lost from "
-                << clientIP
-                << ".\n";
-
             break;
         }
 
+        message = trim(message);
 
-        // ============================================
-        // HELLO
-        // ============================================
-
-        if (message.rfind(
-                "HELLO ",
-                0) == 0)
+        if (message.empty())
         {
-            connectedAgentId =
-                message.substr(6);
+            continue;
+        }
 
+        // ============================================================
+        // HELLO
+        // ============================================================
+        if (message.rfind("HELLO", 0) == 0)
+        {
+            agentId = extractHelloAgentId(message);
 
-            const std::string response =
-                "WELCOME FROM NETPULSE SERVER";
-
-
-            if (!sendFramedMessage(
-                    clientSocket,
-                    response))
+            if (agentId.empty())
             {
                 std::cerr
-                    << "Error: Failed to send WELCOME "
-                       "to "
-                    << connectedAgentId
-                    << ".\n";
+                    << "Rejected HELLO from "
+                    << clientIp
+                    << ": missing agent ID."
+                    << std::endl;
 
                 break;
             }
 
+            if (agentId.size() > 64)
+            {
+                std::cerr
+                    << "Rejected HELLO from "
+                    << clientIp
+                    << ": agent ID too long."
+                    << std::endl;
 
-            // ----------------------------------------
-            // Create initial agent state
-            // ----------------------------------------
+                break;
+            }
 
-            AgentState state{};
+            identified = true;
 
+            const std::string welcomeMessage =
+                "WELCOME AGENT=" + agentId;
 
-            state.agentId =
-                connectedAgentId;
+            if (
+                !sendFramedMessage(
+                    clientSocket,
+                    welcomeMessage
+                )
+            )
+            {
+                std::cerr
+                    << "Failed to send WELCOME to "
+                    << agentId
+                    << "."
+                    << std::endl;
 
+                break;
+            }
 
-            state.clientIP =
-                clientIP;
+            AgentState state;
 
-
+            state.agentId = agentId;
+            state.hostname = "UNKNOWN";
+            state.clientIP = clientIp;
             state.lastSeen =
                 std::chrono::system_clock::now();
-
-
             state.status =
                 AgentStatus::HEALTHY;
 
+            agentRegistry.updateAgent(state);
 
-            // ----------------------------------------
-            // Update memory registry
-            // ----------------------------------------
-
-            agentRegistry.updateAgent(
-                state
-            );
-
-
-            // ----------------------------------------
-            // Persist agent state
-            // ----------------------------------------
-
-            if (!database.saveAgentState(
-                    state))
+            if (!database.saveAgentState(state))
             {
                 std::cerr
-                    << "Warning: Failed to save "
-                       "initial agent state.\n";
+                    << "Failed to save initial state for "
+                    << agentId
+                    << "."
+                    << std::endl;
             }
 
-
             std::cout
-                << "\nHELLO received from "
-                << connectedAgentId
-                << ".\n";
+                << "\n========================================\n"
+                << "AGENT CONNECTED\n"
+                << "========================================\n"
+                << "Agent     : "
+                << agentId
+                << "\n"
+                << "Client IP : "
+                << clientIp
+                << "\n"
+                << "Status    : HEALTHY\n"
+                << "========================================\n"
+                << std::endl;
 
-            std::cout
-                << "Agent registered as HEALTHY.\n";
-
-            std::cout
-                << "WELCOME sent.\n";
+            continue;
         }
 
-
-        // ============================================
-        // TELEMETRY
-        // ============================================
-
-        else if (
-            message.rfind(
-                "TYPE=TELEMETRY",
-                0) == 0)
+        // ============================================================
+        // HEARTBEAT
+        // ============================================================
+        if (message.rfind("HEARTBEAT", 0) == 0)
         {
-            ParsedTelemetry telemetry{};
-
-
-            // ----------------------------------------
-            // Parse telemetry
-            // ----------------------------------------
-
-            if (!parseTelemetry(
+            std::string heartbeatAgentId =
+                extractField(
                     message,
-                    telemetry))
+                    "AGENT"
+                );
+
+            // Existing agent connection may send simply:
+            // HEARTBEAT
+            if (heartbeatAgentId.empty())
+            {
+                heartbeatAgentId = agentId;
+            }
+
+            if (heartbeatAgentId.empty())
             {
                 std::cerr
-                    << "\nInvalid telemetry from "
-                    << clientIP
-                    << ".\n";
+                    << "Rejected HEARTBEAT from "
+                    << clientIp
+                    << ": missing agent ID."
+                    << std::endl;
 
                 continue;
             }
 
+            if (heartbeatAgentId.size() > 64)
+            {
+                std::cerr
+                    << "Rejected HEARTBEAT from "
+                    << clientIp
+                    << ": agent ID too long."
+                    << std::endl;
 
-            // ----------------------------------------
+                continue;
+            }
+
+            AgentState existingState;
+
+            if (
+                agentRegistry.getAgent(
+                    heartbeatAgentId,
+                    existingState
+                )
+            )
+            {
+                const AgentStatus previousStatus =
+                    existingState.status;
+
+                existingState.lastSeen =
+                    std::chrono::system_clock::now();
+
+                existingState.clientIP =
+                    clientIp;
+
+                existingState.status =
+                    AgentStatus::HEALTHY;
+
+                agentRegistry.updateAgent(
+                    existingState
+                );
+
+                database.saveAgentState(
+                    existingState
+                );
+
+                if (
+                    previousStatus == AgentStatus::SUSPECTED ||
+                    previousStatus == AgentStatus::OFFLINE
+                )
+                {
+                    std::cout
+                        << "\n========================================\n"
+                        << "AGENT RECOVERED\n"
+                        << "========================================\n"
+                        << "Agent     : "
+                        << heartbeatAgentId
+                        << "\n"
+                        << "Previous  : "
+                        << statusToString(previousStatus)
+                        << "\n"
+                        << "Current   : HEALTHY\n"
+                        << "========================================\n"
+                        << std::endl;
+                }
+            }
+            else
+            {
+                AgentState newState;
+
+                newState.agentId =
+                    heartbeatAgentId;
+
+                newState.hostname =
+                    "UNKNOWN";
+
+                newState.clientIP =
+                    clientIp;
+
+                newState.lastSeen =
+                    std::chrono::system_clock::now();
+
+                newState.status =
+                    AgentStatus::HEALTHY;
+
+                agentRegistry.updateAgent(
+                    newState
+                );
+
+                database.saveAgentState(
+                    newState
+                );
+            }
+
+            std::cout
+                << "HEARTBEAT received from "
+                << heartbeatAgentId
+                << "."
+                << std::endl;
+
+            continue;
+        }
+
+        // ============================================================
+        // TELEMETRY
+        // ============================================================
+        if (
+            message.rfind("TYPE=TELEMETRY", 0) == 0
+        )
+        {
+            ParsedTelemetry telemetry;
+
+            // --------------------------------------------------------
+            // Parse telemetry
+            // --------------------------------------------------------
+            if (!parseTelemetry(message, telemetry))
+            {
+                std::cerr
+                    << "Rejected malformed telemetry from "
+                    << agentId
+                    << "."
+                    << std::endl;
+
+                continue;
+            }
+
+            // --------------------------------------------------------
+            // Validate telemetry
+            // --------------------------------------------------------
+            std::string validationError;
+
+            if (
+                !validateTelemetry(
+                    telemetry,
+                    validationError
+                )
+            )
+            {
+                std::cerr
+                    << "Rejected invalid telemetry from "
+                    << telemetry.agentId
+                    << ": "
+                    << validationError
+                    << std::endl;
+
+                continue;
+            }
+
+            // --------------------------------------------------------
+            // Verify agent ID
+            // --------------------------------------------------------
+            if (telemetry.agentId.empty())
+            {
+                std::cerr
+                    << "Rejected telemetry: missing agent ID."
+                    << std::endl;
+
+                continue;
+            }
+
+            if (telemetry.agentId.size() > 64)
+            {
+                std::cerr
+                    << "Rejected telemetry: agent ID too long."
+                    << std::endl;
+
+                continue;
+            }
+
+            // --------------------------------------------------------
+            // Prevent one client from impersonating another agent
+            // --------------------------------------------------------
+            if (
+                identified &&
+                !agentId.empty() &&
+                telemetry.agentId != agentId
+            )
+            {
+                std::cerr
+                    << "Rejected telemetry: agent identity mismatch."
+                    << std::endl;
+
+                continue;
+            }
+
+            // --------------------------------------------------------
             // Build AgentState
-            // ----------------------------------------
-
-            AgentState state{};
-
+            // --------------------------------------------------------
+            AgentState state;
 
             state.agentId =
                 telemetry.agentId;
 
-
             state.hostname =
                 telemetry.hostname;
 
-
             state.clientIP =
-                clientIP;
-
+                clientIp;
 
             state.cpuUsage =
                 telemetry.cpuUsage;
 
-
             state.memoryUsage =
                 telemetry.memoryUsage;
-
 
             state.uptime =
                 telemetry.uptime;
 
-
             state.interfaceName =
                 telemetry.interfaceName;
-
 
             state.rxBytesPerSecond =
                 telemetry.rxBytesPerSecond;
 
-
             state.txBytesPerSecond =
                 telemetry.txBytesPerSecond;
-
 
             state.rxPacketsPerSecond =
                 telemetry.rxPacketsPerSecond;
 
-
             state.txPacketsPerSecond =
                 telemetry.txPacketsPerSecond;
-
 
             state.rxErrors =
                 telemetry.rxErrors;
 
-
             state.txErrors =
                 telemetry.txErrors;
-
 
             state.rxDrops =
                 telemetry.rxDrops;
 
-
             state.txDrops =
                 telemetry.txDrops;
 
-
             state.lastSeen =
                 std::chrono::system_clock::now();
-
 
             state.status =
                 AgentStatus::HEALTHY;
 
+            // --------------------------------------------------------
+            // Update registry
+            // --------------------------------------------------------
+            agentRegistry.updateAgent(state);
 
-            // ----------------------------------------
-            // Update agent registry
-            // ----------------------------------------
-
-            agentRegistry.updateAgent(
-                state
-            );
-
-
-            // ----------------------------------------
-            // Persist agent state
-            // ----------------------------------------
-
-            if (!database.saveAgentState(
-                    state))
+            // --------------------------------------------------------
+            // Save persistent agent state
+            // --------------------------------------------------------
+            if (
+                !database.saveAgentState(state)
+            )
             {
                 std::cerr
-                    << "Warning: Failed to save "
-                       "agent state.\n";
+                    << "Failed to save agent state for "
+                    << telemetry.agentId
+                    << "."
+                    << std::endl;
             }
 
-
-            // ----------------------------------------
-            // Persist telemetry
-            // ----------------------------------------
-
-            if (database.saveTelemetry(
-                    telemetry))
+            // --------------------------------------------------------
+            // Save telemetry
+            // --------------------------------------------------------
+            if (
+                database.saveTelemetry(telemetry)
+            )
             {
                 std::cout
-                    << "Telemetry saved to SQLite.\n";
+                    << "Telemetry saved to SQLite."
+                    << std::endl;
             }
             else
             {
                 std::cerr
-                    << "Warning: Failed to save "
-                       "telemetry.\n";
+                    << "Failed to save telemetry to SQLite."
+                    << std::endl;
             }
 
-
-            // ----------------------------------------
-            // Fault detection with deduplication
-            // ----------------------------------------
-
+            // --------------------------------------------------------
+            // Fault detection
+            // --------------------------------------------------------
             FaultUpdateResult faultUpdate =
-                faultTracker.update(
+                faultTracker.update(state);
+
+            // --------------------------------------------------------
+            // New faults
+            // --------------------------------------------------------
+            for (
+                const FaultEvent& fault :
+                faultUpdate.newFaults
+            )
+            {
+                if (
+                    database.saveFault(fault)
+                )
+                {
+                    std::cout
+                        << "\n========================================\n"
+                        << "NEW FAULT\n"
+                        << "========================================\n"
+                        << "Agent     : "
+                        << fault.agentId
+                        << "\n"
+                        << "Interface : "
+                        << fault.interfaceName
+                        << "\n"
+                        << "Type      : "
+                        << fault.faultType
+                        << "\n"
+                        << "Severity  : "
+                        << severityToString(
+                               fault.severity
+                           )
+                        << "\n"
+                        << "Description: "
+                        << fault.description
+                        << "\n"
+                        << "========================================\n"
+                        << std::endl;
+                }
+            }
+
+            // --------------------------------------------------------
+            // Resolved faults
+            // --------------------------------------------------------
+            for (
+                const FaultEvent& fault :
+                faultUpdate.resolvedFaults
+            )
+            {
+                if (
+                    database.saveFault(fault)
+                )
+                {
+                    std::cout
+                        << "\n========================================\n"
+                        << "FAULT RESOLVED\n"
+                        << "========================================\n"
+                        << "Agent     : "
+                        << fault.agentId
+                        << "\n"
+                        << "Interface : "
+                        << fault.interfaceName
+                        << "\n"
+                        << "Type      : "
+                        << fault.faultType
+                        << "\n"
+                        << "Severity  : "
+                        << severityToString(
+                               fault.severity
+                           )
+                        << "\n"
+                        << "Description: "
+                        << fault.description
+                        << "\n"
+                        << "========================================\n"
+                        << std::endl;
+                }
+            }
+
+            // --------------------------------------------------------
+            // Display telemetry
+            // --------------------------------------------------------
+            std::cout
+                << "\n----------------------------------------\n"
+                << "TELEMETRY FROM "
+                << telemetry.agentId
+                << "\n"
+                << "----------------------------------------\n"
+                << std::fixed
+                << std::setprecision(2)
+                << "CPU       : "
+                << telemetry.cpuUsage
+                << " %\n"
+                << "Memory    : "
+                << telemetry.memoryUsage
+                << " %\n"
+                << "Interface : "
+                << telemetry.interfaceName
+                << "\n"
+                << "RX Rate   : "
+                << telemetry.rxBytesPerSecond
+                << " B/s\n"
+                << "TX Rate   : "
+                << telemetry.txBytesPerSecond
+                << " B/s\n"
+                << "RX Errors : "
+                << telemetry.rxErrors
+                << "\n"
+                << "TX Errors : "
+                << telemetry.txErrors
+                << "\n"
+                << "RX Drops  : "
+                << telemetry.rxDrops
+                << "\n"
+                << "TX Drops  : "
+                << telemetry.txDrops
+                << "\n"
+                << "----------------------------------------\n"
+                << std::endl;
+
+            continue;
+        }
+
+        // ============================================================
+        // UNKNOWN MESSAGE
+        // ============================================================
+        std::cerr
+            << "Unknown message received from "
+            << clientIp
+            << ": "
+            << message
+            << std::endl;
+    }
+
+    // ================================================================
+    // CONNECTION LOST
+    // ================================================================
+    if (!agentId.empty())
+    {
+        AgentState state;
+
+        if (
+            agentRegistry.getAgent(
+                agentId,
+                state
+            )
+        )
+        {
+            if (
+                state.status != AgentStatus::OFFLINE
+            )
+            {
+                state.status =
+                    AgentStatus::SUSPECTED;
+
+                state.lastSeen =
+                    std::chrono::system_clock::now();
+
+                state.clientIP =
+                    clientIp;
+
+                agentRegistry.updateAgent(
                     state
                 );
 
+                database.saveAgentState(
+                    state
+                );
 
-            // ----------------------------------------
-            // Newly detected faults
-            // ----------------------------------------
-
-            for (const auto& fault :
-                 faultUpdate.newFaults)
-            {
-                std::cout
-                    << "\n========================================\n";
+                database.updateAgentStatus(
+                    agentId,
+                    AgentStatus::SUSPECTED
+                );
 
                 std::cout
-                    << "FAULT DETECTED\n";
-
-                std::cout
-                    << "========================================\n";
-
-                std::cout
-                    << "Agent      : "
-                    << fault.agentId
-                    << "\n";
-
-                std::cout
-                    << "Interface  : "
-                    << fault.interfaceName
-                    << "\n";
-
-                std::cout
-                    << "Fault Type : "
-                    << fault.faultType
-                    << "\n";
-
-                std::cout
-                    << "Severity   : "
-                    << severityToString(
-                           fault.severity)
-                    << "\n";
-
-                std::cout
-                    << "Description: "
-                    << fault.description
-                    << "\n";
-
-                std::cout
-                    << "========================================\n";
-
-
-                if (database.saveFault(
-                        fault))
-                {
-                    std::cout
-                        << "New fault event saved "
-                           "to SQLite.\n";
-                }
-                else
-                {
-                    std::cerr
-                        << "Warning: Failed to save "
-                           "fault event.\n";
-                }
+                    << "Agent "
+                    << agentId
+                    << " marked SUSPECTED "
+                    << "after connection loss."
+                    << std::endl;
             }
-
-
-            // ----------------------------------------
-            // Resolved faults
-            // ----------------------------------------
-
-            for (const auto& fault :
-                 faultUpdate.resolvedFaults)
-            {
-                std::cout
-                    << "\n========================================\n";
-
-                std::cout
-                    << "FAULT RESOLVED\n";
-
-                std::cout
-                    << "========================================\n";
-
-                std::cout
-                    << "Agent      : "
-                    << fault.agentId
-                    << "\n";
-
-                std::cout
-                    << "Interface  : "
-                    << fault.interfaceName
-                    << "\n";
-
-                std::cout
-                    << "Fault Type : "
-                    << fault.faultType
-                    << "\n";
-
-                std::cout
-                    << "Severity   : INFO\n";
-
-                std::cout
-                    << "Description: "
-                    << fault.description
-                    << "\n";
-
-                std::cout
-                    << "========================================\n";
-
-
-                if (database.saveFault(
-                        fault))
-                {
-                    std::cout
-                        << "Fault resolution saved "
-                           "to SQLite.\n";
-                }
-                else
-                {
-                    std::cerr
-                        << "Warning: Failed to save "
-                           "fault resolution.\n";
-                }
-            }
-
-
-            // ----------------------------------------
-            // Display telemetry
-            // ----------------------------------------
-
-            std::cout
-                << "\n----------------------------------------\n";
-
-            std::cout
-                << "TELEMETRY FROM "
-                << telemetry.agentId
-                << "\n";
-
-            std::cout
-                << "----------------------------------------\n";
-
-
-            std::cout
-                << std::fixed
-                << std::setprecision(2);
-
-
-            std::cout
-                << "CPU       : "
-                << telemetry.cpuUsage
-                << " %\n";
-
-
-            std::cout
-                << "Memory    : "
-                << telemetry.memoryUsage
-                << " %\n";
-
-
-            std::cout
-                << "Interface : "
-                << telemetry.interfaceName
-                << "\n";
-
-
-            std::cout
-                << "RX Rate   : "
-                << telemetry.rxBytesPerSecond
-                << " B/s\n";
-
-
-            std::cout
-                << "TX Rate   : "
-                << telemetry.txBytesPerSecond
-                << " B/s\n";
-
-
-            std::cout
-                << "RX Errors : "
-                << telemetry.rxErrors
-                << "\n";
-
-
-            std::cout
-                << "TX Errors : "
-                << telemetry.txErrors
-                << "\n";
-
-
-            std::cout
-                << "RX Drops  : "
-                << telemetry.rxDrops
-                << "\n";
-
-
-            std::cout
-                << "TX Drops  : "
-                << telemetry.txDrops
-                << "\n";
-        }
-
-
-        // ============================================
-        // HEARTBEAT
-        // ============================================
-
-        else if (
-            message.rfind(
-                "HEARTBEAT",
-                0) == 0)
-        {
-            if (!connectedAgentId.empty())
-            {
-                AgentState state{};
-
-
-                if (agentRegistry.getAgent(
-                        connectedAgentId,
-                        state))
-                {
-                    AgentStatus previousStatus =
-                        state.status;
-
-
-                    state.lastSeen =
-                        std::chrono::system_clock::now();
-
-
-                    state.status =
-                        AgentStatus::HEALTHY;
-
-
-                    // ------------------------------
-                    // Update memory registry
-                    // ------------------------------
-
-                    agentRegistry.updateAgent(
-                        state
-                    );
-
-
-                    // ------------------------------
-                    // Persist state
-                    // ------------------------------
-
-                    if (!database.saveAgentState(
-                            state))
-                    {
-                        std::cerr
-                            << "Warning: Failed to "
-                               "save heartbeat state.\n";
-                    }
-
-
-                    // ------------------------------
-                    // Recovery
-                    // ------------------------------
-
-                    if (previousStatus ==
-                        AgentStatus::SUSPECTED ||
-                        previousStatus ==
-                        AgentStatus::OFFLINE)
-                    {
-                        std::cout
-                            << "\n[RECOVERY] "
-                            << connectedAgentId
-                            << " is HEALTHY again.\n";
-                    }
-                }
-            }
-
-
-            std::cout
-                << "HEARTBEAT received from "
-                << connectedAgentId
-                << ".\n";
-        }
-
-
-        // ============================================
-        // UNKNOWN MESSAGE
-        // ============================================
-
-        else
-        {
-            std::cout
-                << "\nUnknown message from "
-                << clientIP
-                << ":\n"
-                << message
-                << "\n";
         }
     }
 
-
-    // ------------------------------------------------
-    // Connection lost
-    // ------------------------------------------------
-    //
-    // Do not immediately mark OFFLINE.
-    // Mark SUSPECTED first and let the background
-    // failure detector move it to OFFLINE.
-    // ------------------------------------------------
-
-    if (!connectedAgentId.empty())
-    {
-        AgentState state{};
-
-
-        if (agentRegistry.getAgent(
-                connectedAgentId,
-                state))
-        {
-            state.status =
-                AgentStatus::SUSPECTED;
-
-
-            state.lastSeen =
-                std::chrono::system_clock::now();
-
-
-            agentRegistry.updateAgent(
-                state
-            );
-
-
-            if (!database.saveAgentState(
-                    state))
-            {
-                std::cerr
-                    << "Warning: Failed to save "
-                       "SUSPECTED agent state.\n";
-            }
-
-
-            std::cout
-                << "\nAgent "
-                << connectedAgentId
-                << " marked SUSPECTED after "
-                   "connection loss.\n";
-        }
-    }
-
+    std::cout
+        << "Connection lost from "
+        << clientIp
+        << "."
+        << std::endl;
 
     close(clientSocket);
 }
 
-
-// --------------------------------------------------
-// MAIN
-// --------------------------------------------------
-
 int main()
 {
-    // ----------------------------------------------
-    // Initialize SQLite
-    // ----------------------------------------------
+    std::cout
+        << "========================================\n"
+        << "          NetPulse Server\n"
+        << "========================================\n";
 
-    if (!database.initialize(
-            "netpulse.db"))
+    // ================================================================
+    // DATABASE
+    // ================================================================
+    if (
+        !database.initialize(
+            "netpulse.db"
+        )
+    )
     {
         std::cerr
-            << "Error: Database initialization failed.\n";
+            << "Failed to initialize database."
+            << std::endl;
 
         return 1;
     }
 
+    std::cout
+        << "Database initialized successfully."
+        << std::endl;
 
-    // ----------------------------------------------
-    // Create TCP socket
-    // ----------------------------------------------
-
-    int serverSocket =
+    // ================================================================
+    // SERVER SOCKET
+    // ================================================================
+    const int serverSocket =
         socket(
             AF_INET,
             SOCK_STREAM,
             0
         );
 
-
     if (serverSocket < 0)
     {
         std::cerr
-            << "Error: Could not create socket.\n";
+            << "Failed to create socket."
+            << std::endl;
 
         return 1;
     }
 
+    int reuse = 1;
 
-    // ----------------------------------------------
-    // Allow address reuse
-    // ----------------------------------------------
-
-    int option = 1;
-
-
-    if (setsockopt(
+    if (
+        setsockopt(
             serverSocket,
             SOL_SOCKET,
             SO_REUSEADDR,
-            &option,
-            sizeof(option)) < 0)
+            &reuse,
+            sizeof(reuse)
+        ) < 0
+    )
     {
         std::cerr
-            << "Error: setsockopt failed.\n";
-
-        close(serverSocket);
-
-        return 1;
+            << "Warning: failed to set SO_REUSEADDR."
+            << std::endl;
     }
 
-
-    // ----------------------------------------------
-    // Configure server address
-    // ----------------------------------------------
-
     sockaddr_in serverAddress{};
-
 
     serverAddress.sin_family =
         AF_INET;
 
-
     serverAddress.sin_addr.s_addr =
         INADDR_ANY;
-
 
     serverAddress.sin_port =
         htons(PORT);
 
-
-    // ----------------------------------------------
-    // Bind
-    // ----------------------------------------------
-
-    if (bind(
+    if (
+        bind(
             serverSocket,
             reinterpret_cast<sockaddr*>(
-                &serverAddress),
-            sizeof(serverAddress)) < 0)
+                &serverAddress
+            ),
+            sizeof(serverAddress)
+        ) < 0
+    )
     {
         std::cerr
-            << "Error: Bind failed.\n";
+            << "Failed to bind server socket to port "
+            << PORT
+            << "."
+            << std::endl;
 
         close(serverSocket);
 
         return 1;
     }
 
-
-    // ----------------------------------------------
-    // Listen
-    // ----------------------------------------------
-
-    if (listen(
+    if (
+        listen(
             serverSocket,
-            20) < 0)
+            SOMAXCONN
+        ) < 0
+    )
     {
         std::cerr
-            << "Error: Listen failed.\n";
+            << "Failed to listen on port "
+            << PORT
+            << "."
+            << std::endl;
 
         close(serverSocket);
 
         return 1;
     }
 
-
-    // ----------------------------------------------
-    // Startup information
-    // ----------------------------------------------
-
     std::cout
-        << "\n========================================\n";
-
-    std::cout
-        << "       NetPulse Monitoring Server\n";
-
-    std::cout
-        << "========================================\n\n";
-
-
-    std::cout
-        << "SQLite database : netpulse.db\n";
-
-
-    std::cout
-        << "Listening on port: "
+        << "Server listening on port "
         << PORT
-        << "\n";
+        << "..."
+        << std::endl;
 
-
-    std::cout
-        << "Suspect timeout : "
-        << SUSPECT_TIMEOUT_SECONDS
-        << " seconds\n";
-
-
-    std::cout
-        << "Offline timeout : "
-        << OFFLINE_TIMEOUT_SECONDS
-        << " seconds\n";
-
-
-    std::cout
-        << "\nWaiting for agents...\n";
-
-
-    // ----------------------------------------------
-    // Start background failure detector
-    // ----------------------------------------------
-
+    // ================================================================
+    // BACKGROUND AGENT MONITOR
+    // ================================================================
     std::thread monitorThread(
         monitorAgents
     );
 
-
     monitorThread.detach();
 
-
-    // ----------------------------------------------
-    // Accept multiple agents
-    // ----------------------------------------------
-
+    // ================================================================
+    // ACCEPT CLIENT CONNECTIONS
+    // ================================================================
     while (true)
     {
         sockaddr_in clientAddress{};
 
-
-        socklen_t clientLength =
+        socklen_t clientAddressLength =
             sizeof(clientAddress);
 
-
-        int clientSocket =
+        const int clientSocket =
             accept(
                 serverSocket,
                 reinterpret_cast<sockaddr*>(
-                    &clientAddress),
-                &clientLength
+                    &clientAddress
+                ),
+                &clientAddressLength
             );
-
 
         if (clientSocket < 0)
         {
             std::cerr
-                << "Error: accept() failed.\n";
+                << "Failed to accept client connection."
+                << std::endl;
 
             continue;
         }
 
-
-        // ------------------------------------------
-        // Dedicated handler thread
-        // ------------------------------------------
+        std::cout
+            << "New client connection accepted."
+            << std::endl;
 
         std::thread clientThread(
             handleClient,
@@ -1095,17 +1013,8 @@ int main()
             clientAddress
         );
 
-
         clientThread.detach();
-
-
-        std::cout
-            << "\nNew agent connection accepted.\n";
-
-        std::cout
-            << "Agent handler thread started.\n";
     }
-
 
     close(serverSocket);
 
