@@ -1,0 +1,12 @@
+.venv/
+.git/
+.gitignore
+
+*.db
+*.o
+
+agent/agent
+server/server
+
+__pycache__/
+*.pyc

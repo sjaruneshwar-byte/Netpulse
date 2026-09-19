@@ -1,0 +1,42 @@
+name: netpulse
+
+services:
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+
+    container_name: netpulse-server
+
+    ports:
+      - "9000:9000"
+
+    volumes:
+      - netpulse_data:/app/server
+
+    restart: unless-stopped
+
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+
+    container_name: netpulse-api
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      - netpulse_data:/app/server
+
+    depends_on:
+      - server
+
+    restart: unless-stopped
+
+
+volumes:
+  netpulse_data:
+

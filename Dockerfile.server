@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1
+
+# =========================
+# Build stage
+# =========================
+FROM ubuntu:24.04 AS build
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        g++ \
+        gcc \
+        make \
+        libc6-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+COPY common ./common
+COPY server ./server
+COPY third_party/sqlite ./third_party/sqlite
+
+# Compile SQLite C source separately as C
+RUN gcc -c \
+    third_party/sqlite/sqlite3.c \
+    -O2 \
+    -o /tmp/sqlite3.o
+
+# Build the NetPulse C++ server
+RUN g++ -std=c++17 -O2 -Wall -Wextra \
+    server/server.cpp \
+    server/telemetry_parser.cpp \
+    server/agent_registry.cpp \
+    server/fault_detector.cpp \
+    server/database.cpp \
+    common/protocol.cpp \
+    /tmp/sqlite3.o \
+    -Ithird_party/sqlite \
+    -pthread \
+    -o /netpulse-server
+
+# =========================
+# Runtime stage
+# =========================
+FROM ubuntu:24.04
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libstdc++6 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /netpulse-server /usr/local/bin/netpulse-server
+
+RUN mkdir -p /app/server
+
+WORKDIR /app/server
+
+EXPOSE 9000
+
+VOLUME ["/app/server"]
+
+CMD ["/usr/local/bin/netpulse-server"]
